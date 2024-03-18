@@ -1,0 +1,6 @@
+torch
+langdetect
+transformers
+nltk
+tqdm
+gradio

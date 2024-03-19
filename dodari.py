@@ -39,7 +39,7 @@ class Dodari:
 
     def main(self):
         with gr.Blocks(css=self.css, theme=gr.themes.Default(primary_hue="red", secondary_hue="pink")) as app:
-            gr.HTML("<h1>대용량 AI번역기 '<span style='color:red'>도다리</span>' 입니다 </h1>")
+            gr.HTML("<h1>AI 한영/영한 번역기 '<span style='color:red'>도다리</span>' 입니다 </h1>")
             with gr.Row():
                 with gr.Column(scale=1, min_width=300):
                     with gr.Tab('순서 1'):
@@ -50,7 +50,7 @@ class Dodari:
 
                 with gr.Column():
                     with gr.Tab('순서 2'):
-                        gr.HTML("<p><a href='https://huggingface.co/NHNDQ/nllb-finetuned-ko2en' target='_blank'>NHNDQ/nllb-finetuned</a> AI 번역모델을 사용합니다</p>")
+                        gr.HTML("<p>현재 <a href='https://huggingface.co/NHNDQ/nllb-finetuned-ko2en' target='_blank'>NHNDQ/nllb-finetuned</a> AI 번역모델을 사용합니다</p>")
                         translate_btn = gr.Button(value="번역 실행하기", size='lg', variant="primary")
                         gr.HTML("<div style='text-align:right'><p style = 'color:grey;'>처음 실행시 모델을 다운받는데 아주 오랜 시간이 걸립니다.</p><p style='color:grey;'>컴퓨터 사양이 좋다면 번역 속도가 빨라집니다.</p><p style='color:grey;'>맥에서는 cpu만 쓰기때문에 번역속도가 느립니다</p></div>")                     
                         with gr.Row():

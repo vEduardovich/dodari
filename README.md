@@ -31,7 +31,7 @@ AI 한영/영한 번역기를<br/> 일반 사람들도 쉽게 쓸수 있게 만�
 고급 사용자라면,
 1. git clone https://github.com/vEduardovich/dodari.git
 2. cd dodari
-3. 실행하기
+3. 아래 방법으로 실행하기
 > - 윈도우는 start_windows.bat 실행
 > - 맥, 우분투는 sh start_mac.sh 실행
 

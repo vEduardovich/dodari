@@ -1,7 +1,7 @@
 # 도다리 Dodari
 [NHNDQ](https://huggingface.co/NHNDQ/nllb-finetuned-en2ko) AI 한영/영한 번역기를 일반 사람들도 쉽게 쓸수 있게 만든 로컬 웹서비스 입니다. (based on Gradio)
 
-<img src='https://github.com/vEduardovich/dodari/blob/main/dodari.png' style='display:block;margin:0 auto;' title='도다리'/>
+<img src='https://github.com/vEduardovich/dodari/blob/main/imgs/dodari.png' style='display:block;margin:0 auto;' title='도다리'/>
 
 <br/>
 
@@ -12,7 +12,7 @@
 - 번역문(원문).txt 파일과 번역문.txt 파일, 이렇게 두가지 파일로 출력됩니다. 번역이 이상할 경우 원문과 바로 비교할수 있습니다.
 - 사용이 아주 쉽습니다. 번역이 필요한 파일들을 드래그한 후 '번역하기' 버튼만 클릭하면 됩니다. 알아서 한<=>영 으로 번역해 줍니다.
 - 번역 성능이 뛰어난 모델로 최신 업데이트가 가능합니다 - 현재는 가성비가 가장 좋은 NHNDQ만 사용합니다.
-<img src='https://github.com/vEduardovich/dodari/blob/main/dodari_src.jpg' style='display:block;border-radius:10px;text-align:center;' title='도다리 실행화면'/>
+<img src='https://github.com/vEduardovich/dodari/blob/main/imgs/dodari_src.jpg' style='display:block;border-radius:10px;text-align:center;' title='도다리 실행화면'/>
 
 <br/>
 

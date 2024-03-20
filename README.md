@@ -1,7 +1,8 @@
 <p align="center">
 <img src='https://github.com/vEduardovich/dodari/blob/main/imgs/dodari.png' title='도다리'/>
 <h1 align="center">도다리 Dodari</h1>
-[NHNDQ](https://huggingface.co/NHNDQ/nllb-finetuned-en2ko) AI 한영/영한 번역기를 일반 사람들도 쉽게 쓸수 있게 만든 로컬 웹서비스 입니다. (based on Gradio)
+<p align='center'><a href='https://huggingface.co/NHNDQ/nllb-finetuned-en2ko' target='_blank'>NHNDQ</a>
+AI 한영/영한 번역기를<br/> 일반 사람들도 쉽게 쓸수 있게 만든 로컬 웹서비스 입니다. (based on Gradio)</p>
 </p>
 
 <br/>

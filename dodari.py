@@ -102,6 +102,7 @@ class Dodari:
     def change_upload(self, files):
         self.selected_files = files
         if not files : return self.upload_msg
+        
         book = self.get_filename(files[0]);
         check_lang = detect(book[0:100])
         origin_lang_str = '영어' if check_lang == 'en' else "한국어"
@@ -112,8 +113,12 @@ class Dodari:
         
         return "<p style='text-align:center;'><span style='color:skyblue;font-size:1.5em;'>{t1}</span><span>를 </span> <span style='color:red;font-size:1.5em;'> {t2}</span><span>로 번역합니다.</span></p>".format(t1=origin_lang_str, t2 = target_lang_str)
     def get_filename(self, fileName):
-        input_file = open(fileName, 'r', encoding='utf-8')
-        return input_file.read()
+        try:
+            input_file = open(fileName, 'r', encoding='utf-8')
+            return input_file.read()
+        except:
+            input_file = open(fileName, 'r', encoding='euc-kr')
+            return input_file.read()
     def write_filename(self, file_name):
         saveDir = os.path.join(os.getcwd(), 'outputs')
         if not(os.path.isdir(saveDir)): 

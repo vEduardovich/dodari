@@ -1,21 +1,21 @@
 
 
-import os, time, re, datetime, platform
+import os, time, datetime, platform
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 import nltk
-nltk.download('punkt')
+nltk.download('punkt', quiet=True)
 from langdetect import detect
+
 from torch import cuda
 from tqdm import tqdm
-import tkinter as tk
 import gradio as gr
 import warnings
 warnings.filterwarnings('ignore')
 
 import logging
 logging.getLogger().disabled = True 
-from gradio.themes.base import Base
-from gradio.themes.utils import colors, sizes
+import warnings
+warnings.filterwarnings('ignore')
 
 class Dodari:
     def __init__(self):
@@ -50,14 +50,13 @@ class Dodari:
 
                 with gr.Column():
                     with gr.Tab('순서 2'):
-                        gr.HTML("<p>현재 <a href='https://huggingface.co/NHNDQ/nllb-finetuned-ko2en' target='_blank'>NHNDQ/nllb-finetuned</a> AI 번역모델을 사용합니다</p>")
                         translate_btn = gr.Button(value="번역 실행하기", size='lg', variant="primary")
                         gr.HTML("<div style='text-align:right'><p style = 'color:grey;'>처음 실행시 모델을 다운받는데 아주 오랜 시간이 걸립니다.</p><p style='color:grey;'>컴퓨터 사양이 좋다면 번역 속도가 빨라집니다.</p><p style='color:grey;'>맥에서는 cpu만 쓰기때문에 번역속도가 느립니다</p></div>")                     
                         with gr.Row():
                             
                             msg = gr.Textbox(label="상태 정보", scale=4, value='번역 대기중..')
                             translate_btn.click(fn=self.translateFn, outputs=msg)
-                            btn_openfolder = gr.Button(value='📂 완료 폴더 열기', scale=1, variant="secondary")
+                            btn_openfolder = gr.Button(value='📂 번역 완료한 파일들 보기', scale=1, variant="secondary")
                             btn_openfolder.click(fn=lambda: self.open_folder(), inputs=None, outputs=None)
 
         app.launch(inbrowser=True)

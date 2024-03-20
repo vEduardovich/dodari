@@ -5,8 +5,8 @@ then
     echo "처음 실행시 도다리 실행 환경부터 만들어야 합니다."
     echo "실행에 필요한 파일들을 설치합니다.."
     echo ""
-    python -m venv venv
-    source venv/bin/activate
+    python3 -m venv venv
+    . venv/bin/activate
 
     pip install -r requirements.txt
 
@@ -23,11 +23,9 @@ then
     echo ""
 fi
 
-source venv/bin/activate
-echo "대용량 번역기 도다리를 시작합니다."
+echo "AI 번역기 도다리를 시작합니다."
+. venv/bin/activate
 echo "잠시만 기다려주세요.."
 
-PYTHON="venv/bin/python"
-python dodari.py
-
+python3 dodari.py
 deactivate

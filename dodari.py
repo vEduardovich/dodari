@@ -9,8 +9,6 @@ from langdetect import detect
 from torch import cuda
 from tqdm import tqdm
 import gradio as gr
-import warnings
-warnings.filterwarnings('ignore')
 
 import logging
 logging.getLogger().disabled = True 

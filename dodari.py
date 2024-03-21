@@ -36,7 +36,7 @@ class Dodari:
 
     def main(self):        
         with gr.Blocks(css=self.css, theme=gr.themes.Default(primary_hue="red", secondary_hue="pink")) as app:
-            gr.HTML("<h1>AI 한영/영한 번역기 '<span style='color:red'>도다리</span>' 입니다 </h1>")
+            gr.HTML("<div align='center'><img src='file/imgs/dodari.png' style='display:block;width:100px;'> <h1 style='margin-top:10px;'>AI 한영/영한 번역기 <span style='color:red'>도다리</span> 입니다 </h1> </div>")
             with gr.Row():
                 with gr.Column(scale=1, min_width=300):
                     with gr.Tab('순서 1'):
@@ -56,7 +56,7 @@ class Dodari:
                             btn_openfolder = gr.Button(value='📂 번역 완료한 파일들 보기', scale=1, variant="secondary")
                             btn_openfolder.click(fn=lambda: self.open_folder(), inputs=None, outputs=None)
 
-        app.launch(inbrowser=True)
+        app.launch(inbrowser=True, favicon_path = 'imgs/favicon.ico', allowed_paths=["."])
     def translateFn(self, progress=gr.Progress(track_tqdm=True)):
         self.start = time.time()
         

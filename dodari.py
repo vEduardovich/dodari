@@ -4,11 +4,10 @@ import nltk
 nltk.download('punkt', quiet=True)
 from langdetect import detect
 
-from torch import cuda
+import torch
+
 from tqdm import tqdm
 import gradio as gr
-import warnings
-warnings.filterwarnings('ignore')
 
 import logging
 logging.getLogger().disabled = True 
@@ -35,7 +34,7 @@ class Dodari:
         self.start = '' 
         self.platform = platform.system()
 
-    def main(self):
+    def main(self):        
         with gr.Blocks(css=self.css, theme=gr.themes.Default(primary_hue="red", secondary_hue="pink")) as app:
             gr.HTML("<h1>AI 한영/영한 번역기 '<span style='color:red'>도다리</span>' 입니다 </h1>")
             with gr.Row():
@@ -49,7 +48,7 @@ class Dodari:
                 with gr.Column():
                     with gr.Tab('순서 2'):
                         translate_btn = gr.Button(value="번역 실행하기", size='lg', variant="primary")
-                        gr.HTML("<div style='text-align:right'><p style = 'color:grey;'>처음 실행시 모델을 다운받는데 아주 오랜 시간이 걸립니다.</p><p style='color:grey;'>컴퓨터 사양이 좋다면 번역 속도가 빨라집니다.</p><p style='color:grey;'>맥에서는 cpu만 쓰기때문에 번역속도가 느립니다</p></div>")                     
+                        gr.HTML("<div style='text-align:right'><p style = 'color:grey;'>처음 실행시 모델을 다운받는데 아주 오랜 시간이 걸립니다.</p><p style='color:grey;'>컴퓨터 사양이 좋다면 번역 속도가 빨라집니다.</p><p style='color:grey;'>맥에서는 cpu만 쓰기때문에 번역속도가 느립니다</p></div>")
                         with gr.Row():
                             
                             msg = gr.Textbox(label="상태 정보", scale=4, value='번역 대기중..')
@@ -63,12 +62,18 @@ class Dodari:
         
         if not self.selected_files : return "번역할 파일을 추가하세요."
 
-        device = 0 if cuda.is_available() else -1 
-
         self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=self.selected_model, cache_dir=os.path.join("models", "tokenizers"))
         self.model = AutoModelForSeq2SeqLM.from_pretrained(pretrained_model_name_or_path=self.selected_model, cache_dir=os.path.join("models"))
+        
+        gpu_count = torch.cuda.device_count()
+        device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu" )
 
-        translator = pipeline('translation', model=self.model, tokenizer=self.tokenizer, device= device, src_lang=self.origin_lang, tgt_lang=self.target_lang, max_length=self.max_len)
+        if gpu_count > 1:
+            self.model = torch.nn.DataParallel(self.model, device_ids=list(range(gpu_count)))
+            torch.multiprocessing.set_start_method('spawn')
+        self.model.to(device)
+
+        translator = pipeline('translation', model=self.model, tokenizer=self.tokenizer, device=device, src_lang=self.origin_lang, tgt_lang=self.target_lang, max_length=self.max_len)
 
         for idx, file in enumerate(tqdm(self.selected_files, desc='파일전체')):
             book = self.get_filename(file);
@@ -100,7 +105,7 @@ class Dodari:
     def change_upload(self, files):
         self.selected_files = files
         if not files : return self.upload_msg
-        
+
         book = self.get_filename(files[0]);
         check_lang = detect(book[0:100])
         origin_lang_str = '영어' if check_lang == 'en' else "한국어"
@@ -108,20 +113,20 @@ class Dodari:
         self.origin_lang = "eng_Latn" if check_lang == 'en' else "kor_Hang"
         self.target_lang = "kor_Hang" if check_lang == 'en' else "eng_Latn"
         self.selected_model = 'NHNDQ/nllb-finetuned-en2ko' if check_lang == 'en' else 'NHNDQ/nllb-finetuned-ko2en'
-        
+
         return "<p style='text-align:center;'><span style='color:skyblue;font-size:1.5em;'>{t1}</span><span>를 </span> <span style='color:red;font-size:1.5em;'> {t2}</span><span>로 번역합니다.</span></p>".format(t1=origin_lang_str, t2 = target_lang_str)
     def get_filename(self, fileName):
         try:
             input_file = open(fileName, 'r', encoding='utf-8')
             return input_file.read()
         except:
-            try : 
+            try :
                 input_file = open(fileName, 'r', encoding='euc-kr')
                 return input_file.read()
-            except : 
+            except :
                 input_file = open(fileName, 'r', encoding='cp949', errors='ignore')
                 return input_file.read()
-            
+
     def write_filename(self, file_name):
         saveDir = os.path.join(os.getcwd(), 'outputs')
         if not(os.path.isdir(saveDir)): 

@@ -1,5 +1,3 @@
-
-
 import os, time, datetime, platform
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 import nltk
@@ -9,6 +7,8 @@ from langdetect import detect
 from torch import cuda
 from tqdm import tqdm
 import gradio as gr
+import warnings
+warnings.filterwarnings('ignore')
 
 import logging
 logging.getLogger().disabled = True 
@@ -115,8 +115,13 @@ class Dodari:
             input_file = open(fileName, 'r', encoding='utf-8')
             return input_file.read()
         except:
-            input_file = open(fileName, 'r', encoding='euc-kr')
-            return input_file.read()
+            try : 
+                input_file = open(fileName, 'r', encoding='euc-kr')
+                return input_file.read()
+            except : 
+                input_file = open(fileName, 'r', encoding='cp949', errors='ignore')
+                return input_file.read()
+            
     def write_filename(self, file_name):
         saveDir = os.path.join(os.getcwd(), 'outputs')
         if not(os.path.isdir(saveDir)): 

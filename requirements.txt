@@ -3,4 +3,4 @@ langdetect
 transformers
 nltk
 tqdm
-gradio
+gradio==4.14.0

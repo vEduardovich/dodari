@@ -19,6 +19,10 @@ AI 한영/영한 번역기를<br/> 일반 사람들도 쉽게 쓸수 있게 만�
 <br/>
 
 ## 설치 및 실행
+공통,
+> 1. **먼저 파이썬이 설치되어 있어야 합니다.** 윈도우에는 파이썬이 기본으로 설치되어 있지 않습니다.
+> 2. https://wikidocs.net/8 를 참고하여 쉽게 설치하실수 있습니다.
+
 초보자라면,
 1. <a href='https://github.com/vEduardovich/dodari/archive/refs/heads/main.zip' title='압축 파일 다운로드' style='text-align:center'>압축 파일 다운로드</a> 클릭
 2. 압축해제 후 

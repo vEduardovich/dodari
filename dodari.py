@@ -1,16 +1,17 @@
+
+
 import os, time, datetime, platform
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 import nltk
 nltk.download('punkt', quiet=True)
 from langdetect import detect
-
 import torch
-
 from tqdm import tqdm
 import gradio as gr
 
 import logging
 logging.getLogger().disabled = True 
+logging.raiseExceptions = False
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -64,7 +65,7 @@ class Dodari:
 
         self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=self.selected_model, cache_dir=os.path.join("models", "tokenizers"))
         self.model = AutoModelForSeq2SeqLM.from_pretrained(pretrained_model_name_or_path=self.selected_model, cache_dir=os.path.join("models"))
-        
+
         gpu_count = torch.cuda.device_count()
         device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu" )
 
@@ -115,6 +116,7 @@ class Dodari:
         self.selected_model = 'NHNDQ/nllb-finetuned-en2ko' if check_lang == 'en' else 'NHNDQ/nllb-finetuned-ko2en'
 
         return "<p style='text-align:center;'><span style='color:skyblue;font-size:1.5em;'>{t1}</span><span>를 </span> <span style='color:red;font-size:1.5em;'> {t2}</span><span>로 번역합니다.</span></p>".format(t1=origin_lang_str, t2 = target_lang_str)
+
     def get_filename(self, fileName):
         try:
             input_file = open(fileName, 'r', encoding='utf-8')

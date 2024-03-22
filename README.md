@@ -75,6 +75,13 @@ _첫 실행시 관련 프로그램 설치와 AI 모델을 다운로드 하는데
       <td>RTX4090 24GB</td>
       <td>5분 25초</td>
     </tr>
+    <tr>
+      <td>데스크탑</td>
+      <td>윈도우11</td>
+      <td>i9-13900k</td>
+      <td>RTX4090 24GB</td>
+      <td>11분 49초</td>
+    </tr>
   </tbody>
 </table>
 

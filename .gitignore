@@ -2,6 +2,7 @@ venv
 models
 temp_1
 temp_2
+outputs
 .DS_Store
 ._.DS_Store
 **/.DS_Store

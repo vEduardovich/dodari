@@ -50,7 +50,7 @@ class Dodari:
         self.remove_folder(self.temp_folder_1)
         self.remove_folder(self.temp_folder_2)
         
-        with gr.Blocks(css=self.css, theme=gr.themes.Default(primary_hue="red", secondary_hue="pink")) as app:
+        with gr.Blocks(css=self.css, title='Dodari', theme=gr.themes.Default(primary_hue="red", secondary_hue="pink")) as app:
             gr.HTML("<div align='center'><img src='file/imgs/dodari.png' style='display:block;width:100px;'> <h1 style='margin-top:10px;'>AI 한영/영한 번역기 <span style='color:red'>도다리</span> 입니다 </h1> </div>")
             with gr.Row():
                 with gr.Column(scale=1, min_width=300):

@@ -22,17 +22,12 @@ AI 한영/영한 번역기를<br/> 일반 사람들도 쉽게 쓸수 있게 만�
 ## 번역 결과
 아래와 같이 두개의 파일이 만들어집니다. epub의 경우 레이아웃이 못생겨져서 모두 번역하지 않고 의도적으로 본문 번역만 하였습니다. 모든 번역 요청이 커지면 그때 기능 추가하겠습니다.
 
+<div style='display:flex'>
+<img src='https://github.com/vEduardovich/dodari/blob/main/imgs/alice_kor(eng).jpg' style='border-radius:10px;margin-right:10px;' title='한영 번역화면'/>
+<img src='https://github.com/vEduardovich/dodari/blob/main/imgs/alice_kor.jpg' style='border-radius:10px;' title='한글 번역화면'/>
+</div>
 <table>
   <tbody>
-    <tr>
-      <td><img src='https://github.com/vEduardovich/dodari/blob/main/imgs/alice_kor(eng).jpg' style='border-radius:10px;max-width:48%;margin-right:10px;' title='한영 번역화면'/>
-      <p>고다리 번역: 번역문(원문)</p>
-      </td>
-      <td><img src='https://github.com/vEduardovich/dodari/blob/main/imgs/alice_kor.jpg' style='border-radius:10px;max-width:48%' title='한글 번역화면'/>
-      <p>고다리 번역: 번역문</p>
-      </td>
-    </tr>
-      <td>
 <pre>"토끼굴 아래로 앨리스는 언니 옆에 앉아서 할 일이 없는 것에 매우 지치기 시작했고, 언니가 읽고 있는 책을 한두 번 들여다봤지만, 그 책에는 그림이나 대화가 없었습니다."그림이나 대화가 없는 책이 무슨 소용이 있을까?"앨리스는 생각했습니다. "그래서 그녀는 데이지 사슬을 만드는 즐거움이 일어나서 데이지를 따는 수고로움의 가치가 있는지, (더운 날이 그녀를 매우 졸리고 멍청하게 만들었 기 때문에 가능한 한 잘 생각했습니다) 마음 속으로 생각하고 있었는데 갑자기 분홍색 눈을 가진 하얀 토끼가 그녀 곁으로 달려갔습니다."거기에는 그렇게 놀라운 것도 없었고 앨리스도 토끼가 스스로 말하는 것을 듣는 것이 그렇게 매우 이상하게 생각하지 않았습니다."오 맙소사! 오, 이런! 너무 늦겠어!" (나중에 곰곰이 생각해보니 앨리스가 이걸 궁금해했어야 했다는 생각이 들었지만, 그 당시에는 모든 것이 아주 자연스러워 보였습니다); 
 "그러나 토끼가 실제로 양복 조끼 주머니에서 시계를 꺼내어 그것을 보고는 서둘러 가자 앨리스는 발걸음을 재촉했습니다. 왜냐하면 양복 조끼 주머니를 가진 토끼나 시계를 꺼내는 토끼를 본 적이 없다는 생각이 스쳐 지나갔고, 호기심에 불타서 그 토끼를 따라 들판을 가로질러 뛰어갔을 때 마침 울타리 아래 커다란 토끼 구멍으로 토끼가 튀어 나오는 것을 보았기 때문입니다."
 "앨리스는 도대체 어떻게 다시 빠져나올 수 있을지 한 번도 생각하지 않은 채 토끼굴을 따라 내려갔고, 토끼굴은 터널처럼 곧장 이어지다가 갑자기 아래로 가라앉아 앨리스는 멈출 생각을 할 틈도 없이 아주 깊은 우물 속으로 떨어지는 자신을 발견했다."</pre>

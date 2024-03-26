@@ -1,4 +1,7 @@
 venv
+models
+temp_1
+temp_2
 .DS_Store
 ._.DS_Store
 **/.DS_Store

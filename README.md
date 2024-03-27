@@ -1,5 +1,5 @@
 <p align="center">
-<img src='https://github.com/vEduardovich/dodari/blob/main/imgs/dodari.png' title='도다리'/>
+<img src='https://github.com/vEduardovich/dodari/assets/20391482/972aee6d-383e-47ed-90b6-73e0cc513973' title='도다리'/>
 <h1 align="center">도다리 Dodari</h1>
 <p align='center'><a href='https://huggingface.co/NHNDQ/nllb-finetuned-en2ko' target='_blank'>NHNDQ</a>
 AI 한영/영한 번역기를<br/> 일반 사람들도 쉽게 쓸수 있게 만든 로컬 웹서비스 입니다. (based on Gradio)</p>
@@ -15,7 +15,7 @@ AI 한영/영한 번역기를<br/> 일반 사람들도 쉽게 쓸수 있게 만�
 
 - 사용이 아주 쉽습니다. 번역이 필요한 파일들을 드래그한 후 `번역 실행하기` 버튼만 클릭하면 됩니다. 알아서 `한↔영` 으로 번역해 줍니다.
 - 번역 성능이 뛰어난 모델로 최신 업데이트가 가능합니다 - 현재는 가성비가 가장 좋은 NHNDQ만 사용합니다.
-<img src='https://github.com/vEduardovich/dodari/blob/main/imgs/dodari_src.jpg' style='display:block;border-radius:10px;text-align:center;' title='도다리 실행화면'/>
+<img src='https://github.com/vEduardovich/dodari/assets/20391482/6d46e5b9-3a49-4950-984f-5bbbbeb5f2b5' style='display:block;border-radius:10px;text-align:center;' title='도다리 실행화면'/>
 
 <br/>
 
@@ -23,12 +23,12 @@ AI 한영/영한 번역기를<br/> 일반 사람들도 쉽게 쓸수 있게 만�
 아래와 같이 두개의 파일이 만들어집니다. epub의 경우 레이아웃이 못생겨져서 모두 번역하지 않고 의도적으로 본문 번역만 하였습니다. 모든 번역 요청이 커지면 그때 기능 추가하겠습니다.
 
 <p align="center">도다리 번역 - 번역문(원문)파일</p>
-<img src='https://github.com/vEduardovich/dodari/blob/main/imgs/alice_kor(eng).jpg' style='border-radius:10px;margin-right:10px;' title='한영 번역화면'/>
+<img src='https://github.com/vEduardovich/dodari/assets/20391482/4227a0bc-9d37-4ebf-b2c1-2d50807ce3c7' style='border-radius:10px;margin-right:10px;' title='한영 번역화면'/>
 
 <br/>
 
 <p align="center" >도다리 번역 - 번역문파일</p>
-<img src='https://github.com/vEduardovich/dodari/blob/main/imgs/alice_kor.jpg' style='border-radius:10px;' title='한글 번역화면'/>
+<img src='https://github.com/vEduardovich/dodari/assets/20391482/a46d3608-4b88-4a18-9b85-406cb90713ff' style='border-radius:10px;' title='한글 번역화면'/>
 
 <p align="center" >(참고) DeepL 번역</p>
 <p>"토끼굴 아래로 앨리스는 언니 옆에 앉아서 할 일이 없는 것에 매우 지치기 시작했고, 언니가 읽고 있는 책을 한두 번 들여다봤지만, 그 책에는 그림이나 대화가 없었습니다."그림이나 대화가 없는 책이 무슨 소용이 있을까?"앨리스는 생각했습니다. "그래서 그녀는 데이지 사슬을 만드는 즐거움이 일어나서 데이지를 따는 수고로움의 가치가 있는지, (더운 날이 그녀를 매우 졸리고 멍청하게 만들었 기 때문에 가능한 한 잘 생각했습니다) 마음 속으로 생각하고 있었는데 갑자기 분홍색 눈을 가진 하얀 토끼가 그녀 곁으로 달려갔습니다."거기에는 그렇게 놀라운 것도 없었고 앨리스도 토끼가 스스로 말하는 것을 듣는 것이 그렇게 매우 이상하게 생각하지 않았습니다."오 맙소사! 오, 이런! 너무 늦겠어!" (나중에 곰곰이 생각해보니 앨리스가 이걸 궁금해했어야 했다는 생각이 들었지만, 그 당시에는 모든 것이 아주 자연스러워 보였습니다); 
@@ -148,5 +148,4 @@ dodari
 
 ## 추후 계획
 1. <s>epub 번역</s> → 개발 및 업데이트 완료 [24.03.26]
-2. ( 요청사항 발생시 ) pdf 및 md파일 번역
-3. ( 요청사항 발생시 ) 다양한 언어와 AI 모델을 선택할수 있게
+2. ( 요청사항 발생시 ) 다양한 언어와 AI 모델을 선택할수 있게

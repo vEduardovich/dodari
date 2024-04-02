@@ -22,7 +22,10 @@ class Dodari:
     def __init__(self):
         self.max_len = 512
         self.selected_files = []
-        self.upload_msg = "<div style='text-align:right;color:grey;'><p>폴더 전체를 업로드 하시려면</p><p>'클릭해서 업로드하기' -> 폴더선택 -> upload클릭 하세요.</p></div>"
+        
+        self.upload_msg = ""
+        self.origin_lang_str = None
+        self.target_lang_str = None
         self.origin_lang = None
         self.target_lang = None
         
@@ -51,48 +54,50 @@ class Dodari:
         self.remove_folder(self.temp_folder_2)
         
         with gr.Blocks(css=self.css, title='Dodari', theme=gr.themes.Default(primary_hue="red", secondary_hue="pink")) as app:
-            gr.HTML("<div align='center'><img src='file/imgs/dodari.png' style='display:block;width:100px;'> <h1 style='margin-top:10px;'>AI 한영/영한 번역기 <span style='color:red'>도다리</span> 입니다 </h1> </div>")
+            gr.HTML("<div align='center'><a href='https://github.com/vEduardovich/dodari' target='_blank'><img src='file/imgs/dodari.png' style='display:block;width:100px;'></a> <h1 style='margin-top:10px;'>AI 한영/영한 번역기 <span style='color:red'><a href='https://github.com/vEduardovich/dodari' target='_blank'>도다리</a></span> 입니다 </h1></div>")
             with gr.Row():
                 with gr.Column(scale=1, min_width=300):
                     with gr.Tab('순서 1'):
                         gr.Markdown("<h3>1. 번역할 파일들 선택</h3>")
-                        input_window = gr.File(file_count="directory", label='파일들' )
+                        input_window = gr.File(file_count="files", label='파일들' )
                         lang_msg= gr.HTML(self.upload_msg)
                         input_window.change(fn=self.change_upload, inputs=input_window, outputs=lang_msg, preprocess=False)
 
                 with gr.Column():
                     with gr.Tab('순서 2'):
-                        translate_btn = gr.Button(value="번역 실행하기", size='lg', variant="primary")
+                        translate_btn = gr.Button(value="번역 실행하기(NHNDQ 모델)", size='lg', variant="primary", interactive = True)
                         gr.HTML("<div style='text-align:right'><p style = 'color:grey;'>처음 실행시 모델을 다운받는데 아주 오랜 시간이 걸립니다.</p><p style='color:grey;'>컴퓨터 사양이 좋다면 번역 속도가 빨라집니다.</p><p style='color:grey;'>맥m1이상에서는 mps를 이용하여 가속합니다</p></div>")
+                        
                         with gr.Row():
                             msg = gr.Textbox(label="상태 정보", scale=4, value='번역 대기중..')
                             translate_btn.click(fn=self.translateFn, outputs=msg)
+
                             btn_openfolder = gr.Button(value='📂 번역 완료한 파일들 보기', scale=1, variant="secondary")
                             btn_openfolder.click(fn=lambda: self.open_folder(), inputs=None, outputs=None)
 
         app.launch(inbrowser=True, favicon_path = 'imgs/dodari.png', allowed_paths=["."])
+
     
     def translateFn( self, progress=gr.Progress() ):
         if not self.selected_files : return "번역할 파일을 추가하세요."
         self.start = time.time()
         
         progress(0, desc="번역 모델을 준비중입니다...")
-
         translator = self.get_translator()
         origin_abb = self.origin_lang.split(sep='_')[0]
         target_abb = self.target_lang.split(sep='_')[0]
         
         for file in progress.tqdm(self.selected_files, desc='파일로딩'):
-            file_name = file['orig_name']
-            name = file_name.split(sep='.')[0]
-            ext = file_name.split(sep='.')[1]
+            name, ext = os.path.splitext(file['orig_name'])
+            
             if 'epub' in ext:
                 self.zip_extract(self.temp_folder_1, file['path'])
                 self.zip_extract(self.temp_folder_2, file['path'])
+
                 file_path = self.get_html_list()
-                
                 for html_file in progress.tqdm(file_path, desc='챕터'):
-                    html_file_2 = html_file.replace(self.temp_folder_1,self.temp_folder_2)
+                
+                    html_file_2 = html_file.replace(self.temp_folder_1, self.temp_folder_2)
                     
                     input_file_1 = open(html_file, 'r', encoding='utf-8') 
                     input_file_2 = open(html_file_2, 'r', encoding='utf-8') 
@@ -100,23 +105,36 @@ class Dodari:
                     soup_1 = BeautifulSoup(input_file_1.read(), 'html.parser')
                     soup_2 = BeautifulSoup(input_file_2.read(), 'html.parser')
                     
-                    for sentence_idx, text_node in enumerate( progress.tqdm( soup_1.find_all('p'), desc='문장수') ):
+                    p_tags_1 = soup_1.find_all('p')
+                    p_tags_2 = soup_2.find_all('p')
+                    ahtml_text = p_tags_1[0].text.strip() if p_tags_1 else None
+                    
+                    if not ahtml_text:
+                        p_tags_1 = soup_1.find_all('div')
+                        p_tags_2 = soup_2.find_all('div')
+                        ahtml_text = p_tags_1[0].text.strip() if p_tags_1 else None
+                        if ahtml_text :
+                            for div_tag_1, div_tag_2 in zip(p_tags_1, p_tags_2):
+                                div_tag_1.name = 'p'
+                                div_tag_2.name = 'p'
+
+                    
+                    for text_node_1, text_node_2 in progress.tqdm( zip(p_tags_1, p_tags_2), desc='단락수' ): 
+                        if not text_node_1.text.strip(): continue
                         
-                        
-                        if not text_node.text.strip(): continue
                         p_tag_1 = soup_1.new_tag('p')
                         p_tag_2 = soup_2.new_tag('p')
                         
                         try:
-                            if text_node.attrs and text_node.attrs['class']:
-                                p_tag_1['class'] = text_node.attrs['class']
-                                p_tag_2['class'] = text_node.attrs['class']
+                            if text_node_1.attrs and text_node_1.attrs['class']:
+                                p_tag_1['class'] = text_node_1.attrs['class']
+                                p_tag_2['class'] = text_node_1.attrs['class']
                         except: pass
 
-                        particle = nltk.sent_tokenize(text_node.text)
+                        particle = nltk.sent_tokenize(text_node_1.text)
                         particle_list_1 = []
                         particle_list_2 = []
-                        for text in particle:
+                        for text in progress.tqdm( particle, desc='문장수') :
                             output = translator(text, max_length=self.max_len)
                             translated_text_1 = "{t1} ({t2}) ".format(t1=output[0]['translation_text'], t2=text) 
                             particle_list_1.append(translated_text_1)
@@ -128,9 +146,7 @@ class Dodari:
                         translated_particle_2 = ' '.join(particle_list_2)
                         p_tag_1.string = translated_particle_1
                         p_tag_2.string = translated_particle_2
-                        
-                        text_node.replace_with(p_tag_1)
-                        text_node_2 = soup_2.find_all('p')[sentence_idx]
+                        text_node_1.replace_with(p_tag_1)
                         text_node_2.replace_with(p_tag_2)
                         
                     input_file_1.close()
@@ -161,6 +177,7 @@ class Dodari:
                     particle = nltk.sent_tokenize(book)
                     
                     for text in progress.tqdm( particle, desc='문장' ):
+                        
                         output = translator(text, max_length=self.max_len)
                         output_file_bi.write("{t1} ({t2}) ".format(t1=output[0]['translation_text'], t2=text) )
                         output_file.write(output[0]['translation_text'])
@@ -169,14 +186,19 @@ class Dodari:
                 output_file_bi.close()
                 output_file.close()
 
-        sec = self.check_time()
-        self.start = None
-
+        sec = self.finalize_fn()
         return "번역완료! 걸린시간 : {t1}".format(t1=sec)
+
+    def finalize_fn(self):
+        sec = self.check_time()
+        self.__init__()
+        return sec
+
     def get_translator(self):
         self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=self.selected_model, cache_dir=os.path.join("models", "tokenizers"))
         self.model = AutoModelForSeq2SeqLM.from_pretrained(pretrained_model_name_or_path=self.selected_model, cache_dir=os.path.join("models"))
 
+        
         gpu_count = torch.cuda.device_count()
         device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu" )
 
@@ -193,8 +215,8 @@ class Dodari:
             self.selected_files = files
             if not files : return self.upload_msg
             aBook = files[0]
-            ext = aBook['orig_name'].split(sep='.')[1]
-            if 'epub' in ext:
+            name, ext = os.path.splitext(aBook['path'])
+            if '.epub' in ext:
                 file = epub.read_epub(aBook['path'])
                 lang = file.get_metadata('DC', 'language')
                 if lang:
@@ -211,19 +233,19 @@ class Dodari:
                             check_lang = detect(lang_str[0:500])
                             if 'en' in check_lang or 'ko' in check_lang: break
                             else:
-                                return "<p style='text-align:center;color:red;'>표준 규격을 벗어난 epub입니다. ufo@himion.com으로 해당 epub파일을 첨부하여 보내주세요. 번역에 실패했습니다.</p>"
+                                return "<p style='text-align:center;color:red;'>표준 규격을 벗어난 epub입니다. <a href='https://moonlit.himion.com/info/contactUs'>이곳</a>을 이용해 해당 epub파일을 첨부해 보내주시면 바로 해결해드립니다. 번역에 실패했습니다.</p>"
                 
             else:
                 book = self.get_filename(aBook['path']);
                 check_lang = detect(book[0:200])
 
-            origin_lang_str= '영어' if 'en' in check_lang else "한국어"
-            target_lang_str = '한국어' if 'en' in check_lang else "영어"
+            self.origin_lang_str = '영어' if 'en' in check_lang else "한국어"
+            self.target_lang_str = '한국어' if 'en' in check_lang else "영어"
             self.origin_lang = "eng_Latn" if 'en' in check_lang else "kor_Hang"
             self.target_lang = "kor_Hang" if 'en' in check_lang else "eng_Latn"
             self.selected_model = 'NHNDQ/nllb-finetuned-en2ko' if 'en' in check_lang else 'NHNDQ/nllb-finetuned-ko2en'
 
-            return "<p style='text-align:center;'><span style='color:skyblue;font-size:1.5em;'>{t1}</span><span>를 </span> <span style='color:red;font-size:1.5em;'> {t2}</span><span>로 번역합니다.</span></p>".format(t1=origin_lang_str, t2 = target_lang_str)
+            return "<p style='text-align:center;'><span style='color:skyblue;font-size:1.5em;'>{t1}</span><span>를 </span> <span style='color:red;font-size:1.5em;'> {t2}</span><span>로 번역합니다.</span></p>".format(t1=self.origin_lang_str, t2 = self.target_lang_str)
         except Exception as err:
             return "<p style='text-align:center;color:red;'>어떤 언어인지 알아내는데 실패했습니다.</p>"
 
@@ -240,7 +262,6 @@ class Dodari:
                 return input_file.read()
 
     def write_filename(self, file_name):
-        
         saveDir = self.output_folder
         if not(os.path.isdir(saveDir)): 
             os.makedirs(os.path.join(saveDir)) 
@@ -250,7 +271,6 @@ class Dodari:
         return output_file
 
     def open_folder(self):
-        
         saveDir = self.output_folder
         if not(os.path.isdir(saveDir)): 
             os.makedirs(saveDir) 
@@ -258,7 +278,6 @@ class Dodari:
         elif self.platform == 'Darwin': os.system(f"open {saveDir}")
         elif self.platform == 'Linux': os.system(f"nautilus {saveDir}")
         
-
     def zip_extract(self, folder_path, epub_file):
         try:
             zip_module = zipfile.ZipFile(epub_file, 'r')
@@ -268,7 +287,6 @@ class Dodari:
         except:
             print('잘못된 epub파일입니다')
             pass
-
     
     def zip_folder(self, folder_path, epub_name):
         try:
@@ -280,8 +298,8 @@ class Dodari:
             zip_module.close()
         except Exception as err:
             print('epub 파일을 생성하는데 실패했습니다.')
+            print(err)            
             pass
-
     
     def get_html_list(self):
         file_path = []

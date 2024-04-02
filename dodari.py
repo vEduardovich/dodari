@@ -191,7 +191,8 @@ class Dodari:
 
     def finalize_fn(self):
         sec = self.check_time()
-        self.__init__()
+        print(f'{sec}')
+        self.start = None# 시간 초기화
         return sec
 
     def get_translator(self):

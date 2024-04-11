@@ -1,5 +1,3 @@
-
-
 import os, time, datetime, platform
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 import nltk
@@ -94,13 +92,15 @@ class Dodari:
                         if not ahtml_text:
                             p_tags_1 = soup_1.find_all('div')
                             p_tags_2 = soup_2.find_all('div')
-                            ahtml_text = p_tags_1[0].text.strip() if p_tags_1 else None
-                            if ahtml_text :
-                                for div_tag_1, div_tag_2 in zip(p_tags_1, p_tags_2):
-                                    div_tag_1.name = 'p'
-                                    div_tag_2.name = 'p'
+                            for p_tag_1, p_tag_2 in zip(p_tags_1, p_tags_2):
+                                if not p_tag_1.find('div'):
+                                    ahtml_text = p_tag_1.text.strip()
+                                    if ahtml_text :
+                                        p_tag_1.name = 'p'
+                                        p_tag_2.name = 'p'
+                                    else: p_tags_1 = soup_1.find_all('p')
+                            p_tags_2 = soup_2.find_all('p')
 
-                        
                         for text_node_1, text_node_2 in progress.tqdm( zip(p_tags_1, p_tags_2), desc='단락수' ): 
                             if not text_node_1.text.strip(): continue
 
@@ -128,6 +128,12 @@ class Dodari:
                             translated_particle_2 = ' '.join(particle_list_2)
                             p_tag_1.string = translated_particle_1
                             p_tag_2.string = translated_particle_2
+                            
+                            img_tag = text_node_1.find('img')
+                            if img_tag:
+                                p_tag_1.append(img_tag)
+                                p_tag_2.append(img_tag)
+                            
                             text_node_1.replace_with(p_tag_1)
                             text_node_2.replace_with(p_tag_2)
 
@@ -136,6 +142,7 @@ class Dodari:
                         output_file_1 = open(html_file, 'w', encoding='utf-8')
                         output_file_2 = open(html_file_2, 'w', encoding='utf-8')
 
+                        
                         output_file_1.write( str(soup_1) )
                         output_file_2.write( str(soup_2) )
                         output_file_1.close()
@@ -190,8 +197,6 @@ class Dodari:
                         with gr.Row():
                             status_msg = gr.Textbox(label="상태 정보", scale=4, value='번역 대기중..')
                             
-
-                            
                             stop_translate_event = translate_btn.click(fn=translateFn, outputs=status_msg )
                             
                             btn_openfolder = gr.Button(value='📂 번역 완료한 파일들 보기', scale=1, variant="secondary")
@@ -208,6 +213,7 @@ class Dodari:
         self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=self.selected_model, cache_dir=os.path.join("models", "tokenizers"))
         self.model = AutoModelForSeq2SeqLM.from_pretrained(pretrained_model_name_or_path=self.selected_model, cache_dir=os.path.join("models"))
 
+        
         gpu_count = torch.cuda.device_count()
         device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu" )
 
@@ -243,6 +249,7 @@ class Dodari:
                             if 'en' in check_lang or 'ko' in check_lang: break
                             else:
                                 return "<p style='text-align:center;color:red;'>표준 규격을 벗어난 epub입니다. <a href='https://moonlit.himion.com/info/contactUs'>이곳</a>을 이용해 해당 epub파일을 첨부해 보내주시면 바로 해결해드립니다. 번역에 실패했습니다.</p>"
+
             else:
                 book = self.get_filename(aBook['path']);
                 check_lang = detect(book[0:200])
@@ -299,6 +306,7 @@ class Dodari:
             print('잘못된 epub파일입니다')
             pass
 
+    
     def zip_folder(self, folder_path, epub_name):
         try:
             zip_module = zipfile.ZipFile(epub_name, 'w', zipfile.ZIP_DEFLATED)
@@ -311,6 +319,7 @@ class Dodari:
             print('epub 파일을 생성하는데 실패했습니다.')
             pass
 
+    
     def get_html_list(self):
         file_path = []
         for root, _, files in os.walk(self.temp_folder_1):

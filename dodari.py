@@ -60,54 +60,102 @@ class Dodari:
         self.remove_folder(self.temp_folder_1)
         self.remove_folder(self.temp_folder_2)
         
-        with gr.Blocks(css=self.css, title='Dodari', theme=gr.themes.Default(primary_hue="red", secondary_hue="pink")) as app:
+        with gr.Blocks(
+            css=self.css,
+            title='Dodari',
+            theme=gr.themes.Default(primary_hue="red", secondary_hue="pink")
+        ) as app:
             gr.HTML("<div align='center'><a href='https://github.com/vEduardovich/dodari' target='_blank'><img src='file/imgs/dodari.png' style='display:block;width:100px;'></a> <h1 style='margin-top:10px;'>AI 한영/영한 번역기 <span style='color:red'><a href='https://github.com/vEduardovich/dodari' target='_blank'>도다리</a></span> 입니다 </h1></div>")
             with gr.Row():
                 with gr.Column(scale=1, min_width=300):
                     with gr.Tab('순서 1'):
                         gr.Markdown("<h3>1. 번역할 파일들 선택</h3>")
-                        input_window = gr.File(file_count="multiple", file_types=[".txt",".epub"], label='파일들' )
+                        input_window = gr.File(
+                            file_count="multiple",
+                            file_types=[".txt", ".epub"],
+                            label='파일들'
+                        )
                         lang_msg = gr.HTML(self.upload_msg)
-                        input_window.change(fn=self.change_upload, inputs=input_window, outputs=lang_msg, preprocess=False)
+                        input_window.change(
+                            fn=self.change_upload,
+                            inputs=input_window,
+                            outputs=lang_msg,
+                            preprocess=False
+                        )
 
                 with gr.Column(scale=2):
                     with gr.Tab('순서 2'):
-                        translate_btn = gr.Button(value="번역 실행하기(NHNDQ 모델)", size='lg', variant="primary", interactive = True)
+                        translate_btn = gr.Button(
+                            value="번역 실행하기(NHNDQ 모델)",
+                            size='lg',
+                            variant="primary",
+                            interactive=True
+                        )
 
                         gr.HTML("<div style='text-align:right'><p style = 'color:grey;'>처음 실행 시 모델을 다운받는데 아주 오랜 시간이 걸립니다.</p><p style='color:grey;'>컴퓨터 사양이 좋다면 번역 속도가 빨라집니다.</p><p style='color:grey;'>맥 M1 이상에서는 MPS를 이용하여 가속합니다.</p></div>")
 
                         with gr.Row():
-                            status_msg = gr.Textbox(label="상태 정보", scale=4, value='번역 대기 중...')
-                            translate_btn.click(fn=self.translateFn, outputs=status_msg )
+                            status_msg = gr.Textbox(
+                                label="상태 정보",
+                                scale=4,
+                                value='번역 대기 중...'
+                            )
+                            translate_btn.click(fn=self.translateFn, outputs=status_msg)
                             
-                            btn_openfolder = gr.Button(value='📂 번역 완료한 파일들 보기', scale=1, variant="secondary")
-                            btn_openfolder.click(fn=lambda: self.open_folder(), inputs=None, outputs=None)
+                            btn_openfolder = gr.Button(
+                                value='📂 번역 완료한 파일들 보기',
+                                scale=1,
+                                variant="secondary"
+                            )
+                            btn_openfolder.click(
+                                fn=lambda: self.open_folder(),
+                                inputs=None,
+                                outputs=None
+                            )
 
-        app.queue().launch(inbrowser=True, favicon_path = 'imgs/dodari.png', allowed_paths=["."])
+        app.queue().launch(
+            inbrowser=True,
+            favicon_path='imgs/dodari.png',
+            allowed_paths=["."]
+        )
 
-    def finalize_fn(self):
+    def finalize_fn(self) -> str:
         sec = self.check_time()
         self.start = None
         
         return sec
 
     def get_translator(self):
-        self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path=self.selected_model, cache_dir=os.path.join("models", "tokenizers"))
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(pretrained_model_name_or_path=self.selected_model, cache_dir=os.path.join("models"))
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            pretrained_model_name_or_path=self.selected_model,
+            cache_dir=os.path.join("models", "tokenizers")
+        )
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(
+            pretrained_model_name_or_path=self.selected_model,
+            cache_dir=os.path.join("models")
+        )
 
-        
         gpu_count = torch.cuda.device_count()
-        device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu" )
+        device = torch.device(
+            "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+        )
 
         if gpu_count > 1:
             self.model = torch.nn.DataParallel(self.model, device_ids=list(range(gpu_count)))
             torch.multiprocessing.set_start_method('spawn')
         self.model.to(device)
 
-        translator = pipeline('translation', model=self.model, tokenizer=self.tokenizer, device=device, src_lang=self.origin_lang, tgt_lang=self.target_lang, max_length=self.max_len)
+        translator = pipeline(
+            'translation',
+            model=self.model,
+            tokenizer=self.tokenizer,
+            device=device,
+            src_lang=self.origin_lang,
+            tgt_lang=self.target_lang,
+            max_length=self.max_len
+        )
         
         return translator
-
 
     def translateFn(self, progress=gr.Progress()) -> str:
         if not self.selected_files: return "번역할 파일을 추가하세요."
@@ -148,7 +196,7 @@ class Dodari:
                         for p_tag_1, p_tag_2 in zip(p_tags_1, p_tags_2):
                             if not p_tag_1.find('div'):
                                 ahtml_text = p_tag_1.text.strip()
-                                if ahtml_text :
+                                if ahtml_text:
                                     p_tag_1.name = 'p'
                                     p_tag_2.name = 'p'
                                 else: p_tags_1 = soup_1.find_all('p')
@@ -169,7 +217,7 @@ class Dodari:
                         particle = nltk.sent_tokenize(text_node_1.text)
                         particle_list_1 = []
                         particle_list_2 = []
-                        for text in progress.tqdm(particle, desc='문장 수') :
+                        for text in progress.tqdm(particle, desc='문장 수'):
                             output = translator(text, max_length=self.max_len)
                             translated_text_1 = "{t1} ({t2}) ".format(t1=output[0]['translation_text'], t2=text) 
                             particle_list_1.append(translated_text_1)
@@ -196,32 +244,44 @@ class Dodari:
                     output_file_2 = open(html_file_2, 'w', encoding='utf-8')
 
                     
-                    output_file_1.write( str(soup_1) )
-                    output_file_2.write( str(soup_2) )
+                    output_file_1.write(str(soup_1))
+                    output_file_2.write(str(soup_2))
                     output_file_1.close()
                     output_file_2.close()
 
-                self.zip_folder(self.temp_folder_1, f'{self.temp_folder_1}.epub')
-                self.zip_folder(self.temp_folder_2, f'{self.temp_folder_2}.epub')
+                for loc_folder in [self.temp_folder_1, self.temp_folder_2]:
+                    self.zip_folder(loc_folder, f'{loc_folder}.epub')
                 os.makedirs(self.output_folder, exist_ok=True)
-                shutil.move(f'{self.temp_folder_1}.epub', os.path.join(self.output_folder, "{name}_{t2}({t3}).{ext}".format(name=name, t2=target_abb, t3=origin_abb, ext = ext) ) )
-                shutil.move(f'{self.temp_folder_2}.epub', os.path.join(self.output_folder, "{name}_{t2}.{ext}".format(name=name, t2=target_abb, ext = ext) ) )
+                shutil.move(
+                    f'{self.temp_folder_1}.epub',
+                    os.path.join(self.output_folder, "{name}_{t2}({t3}).{ext}".format(name=name, t2=target_abb, t3=origin_abb, ext=ext))
+                )
+                shutil.move(
+                    f'{self.temp_folder_2}.epub',
+                    os.path.join(self.output_folder, "{name}_{t2}.{ext}".format(name=name, t2=target_abb, ext = ext))
+                )
 
                 self.remove_folder(self.temp_folder_1)
                 self.remove_folder(self.temp_folder_2)
 
             else:
-                output_file_bi = self.write_filename( "{name}_{t2}({t3}).{ext}".format(name=name, t2=target_abb, t3=origin_abb, ext = ext) )
-                output_file = self.write_filename( "{name}_{t2}.{ext}".format(name=name, t2=target_abb, ext = ext) )
+                output_file_bi = self.write_filename(
+                    "{name}_{t2}({t3}).{ext}".format(name=name, t2=target_abb, t3=origin_abb, ext = ext)
+                )
+                output_file = self.write_filename(
+                    "{name}_{t2}.{ext}".format(name=name, t2=target_abb, ext = ext)
+                )
 
                 book = self.get_filename(file['path']);
                 book_list = book.split(sep='\n')
                 for book in progress.tqdm(book_list, desc='단락'):
                     particle = nltk.sent_tokenize(book)
                     
-                    for text in progress.tqdm( particle, desc='문장' ):
+                    for text in progress.tqdm(particle, desc='문장'):
                         output = translator(text, max_length=self.max_len)
-                        output_file_bi.write("{t1} ({t2}) ".format(t1=output[0]['translation_text'], t2=text) )
+                        output_file_bi.write(
+                            "{t1} ({t2}) ".format(t1=output[0]['translation_text'], t2=text)
+                        )
                         output_file.write(output[0]['translation_text'])
                     output_file_bi.write('\n')
                     output_file.write('\n')
@@ -277,7 +337,7 @@ class Dodari:
             input_file = open(fileName, 'r', encoding='utf-8')
             return input_file.read()
         except:
-            try :
+            try:
                 input_file = open(fileName, 'r', encoding='euc-kr')
                 return input_file.read()
             except :
@@ -305,7 +365,7 @@ class Dodari:
         elif self.platform == 'Linux': command_to_open = f"nautilus {saveDir}"
         os.system(command_to_open)
         
-    def zip_extract(self, folder_path, epub_file):
+    def zip_extract(self, folder_path: PathType, epub_file: PathType):
         try:
             zip_module = zipfile.ZipFile(epub_file, 'r')
             os.makedirs(folder_path, exist_ok=True)
@@ -316,7 +376,7 @@ class Dodari:
             print('잘못된 epub파일입니다')
             pass
     
-    def zip_folder(self, folder_path, epub_name):
+    def zip_folder(self, folder_path: PathType, epub_name: PathType):
         try:
             zip_module = zipfile.ZipFile(epub_name, 'w', zipfile.ZIP_DEFLATED)
             for root, dirs, files in os.walk(folder_path):
@@ -328,7 +388,6 @@ class Dodari:
         except Exception as err:
             print('epub 파일을 생성하는데 실패했습니다.')
             pass
-
 
     def get_html_list(self) -> List:
         file_paths = []

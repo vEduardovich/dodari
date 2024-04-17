@@ -58,7 +58,7 @@ class Dodari:
                 with gr.Column(scale=1, min_width=300):
                     with gr.Tab('순서 1'):
                         gr.Markdown("<h3>1. 번역할 파일들 선택</h3>")
-                        input_window = gr.File(file_count="files", label='파일들' )
+                        input_window = gr.File(file_count="multiple", file_types=[".txt",".epub"], label='파일들' )
                         lang_msg= gr.HTML(self.upload_msg)
                         input_window.change(fn=self.change_upload, inputs=input_window, outputs=lang_msg, preprocess=False)
 

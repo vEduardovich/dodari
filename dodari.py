@@ -293,9 +293,9 @@ class Dodari:
         return "번역 완료! 걸린 시간: {t1}".format(t1=sec)
 
 
-    def change_upload(self, files: Sequence):
+    def change_upload(self, files: List):
         try:
-            self.selected_files = list(files)
+            self.selected_files = files
             if not files : return self.upload_msg
             aBook = files[0]
             name, ext = os.path.splitext(aBook['path'])

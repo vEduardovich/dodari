@@ -1,8 +1,8 @@
 --extra-index-url https://download.pytorch.org/whl/cu118
-torch
+torch==2.1.2
+gradio==4.14.0
+transformers==4.40.0
+nltk==3.8.1
 langdetect
 beautifulsoup4
-transformers
-nltk
 EbookLib
-gradio==4.14.0

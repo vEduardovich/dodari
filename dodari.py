@@ -254,11 +254,11 @@ class Dodari:
                 os.makedirs(self.output_folder, exist_ok=True)
                 shutil.move(
                     f'{self.temp_folder_1}.epub',
-                    os.path.join(self.output_folder, "{name}_{t2}({t3}).{ext}".format(name=name, t2=target_abb, t3=origin_abb, ext=ext))
+                    os.path.join(self.output_folder, "{name}_{t2}({t3}){ext}".format(name=name, t2=target_abb, t3=origin_abb, ext=ext))
                 )
                 shutil.move(
                     f'{self.temp_folder_2}.epub',
-                    os.path.join(self.output_folder, "{name}_{t2}.{ext}".format(name=name, t2=target_abb, ext = ext))
+                    os.path.join(self.output_folder, "{name}_{t2}{ext}".format(name=name, t2=target_abb, ext = ext))
                 )
 
                 self.remove_folder(self.temp_folder_1)
@@ -266,10 +266,10 @@ class Dodari:
 
             else:
                 output_file_bi = self.write_filename(
-                    "{name}_{t2}({t3}).{ext}".format(name=name, t2=target_abb, t3=origin_abb, ext = ext)
+                    "{name}_{t2}({t3}){ext}".format(name=name, t2=target_abb, t3=origin_abb, ext = ext)
                 )
                 output_file = self.write_filename(
-                    "{name}_{t2}.{ext}".format(name=name, t2=target_abb, ext = ext)
+                    "{name}_{t2}{ext}".format(name=name, t2=target_abb, ext = ext)
                 )
 
                 book = self.get_filename(file['path']);

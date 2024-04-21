@@ -72,9 +72,9 @@ class Dodari:
                 <img src='file/imgs/dodari.png' style='display: block; width: 100px;'>
                 </a>
                 <h1 style='margin-top: 10px;'>AI 한영/영한 번역기
-                    <span style='color: red'>
-                    <a href='https://github.com/vEduardovich/dodari' target='_blank'>도다리</a>
-                    </span> 입니다.
+                <span style='color: red'>
+                <a href='https://github.com/vEduardovich/dodari' target='_blank'>도다리</a>
+                </span> 입니다.
                 </h1>
             </div>
             """)
@@ -286,7 +286,8 @@ class Dodari:
                     f'{self.temp_folder_2}.epub',
                     os.path.join(
                         self.output_folder,
-                        f"{name}_{target_abb}{ext}")
+                        f"{name}_{target_abb}{ext}"
+                    )
                 )
 
                 self.remove_folder(self.temp_folder_1)
@@ -405,17 +406,20 @@ class Dodari:
 
     def open_folder(self):
         save_dir = self.output_folder
-        command_to_open = ''
+        open_command_dict = {
+            'Windows': 'start',
+            'Darwin': 'open',
+            'Linux': 'nautilus'
+        }
 
         if not (os.path.isdir(save_dir)):
             os.makedirs(save_dir)
-        if self.platform == 'Windows':
-            command_to_open = f"start {save_dir}"
-        elif self.platform == 'Darwin':
-            command_to_open = f"open {save_dir}"
-        elif self.platform == 'Linux':
-            command_to_open = f"nautilus {save_dir}"
-        os.system(command_to_open)
+        if self.platform in open_command_dict.keys():
+            print(f"Detected the platform as: {self.platform}")
+            command_to_open = f"{open_command_dict[self.platform]} {save_dir}"
+            os.system(command_to_open)
+        else:
+            raise NotImplementedError
 
     @staticmethod
     def zip_extract(folder_path: PathType, epub_file: PathType):

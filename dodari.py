@@ -62,9 +62,9 @@ class Dodari:
         self.remove_folder(self.temp_folder_2)
 
         with gr.Blocks(
-                css=self.css,
-                title='Dodari',
-                theme=gr.themes.Default(primary_hue="red", secondary_hue="pink")
+            css=self.css,
+            title='Dodari',
+            theme=gr.themes.Default(primary_hue="red", secondary_hue="pink")
         ) as app:
             gr.HTML("""
             <div align='center'>

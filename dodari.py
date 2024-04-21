@@ -65,7 +65,18 @@ class Dodari:
             title='Dodari',
             theme=gr.themes.Default(primary_hue="red", secondary_hue="pink")
         ) as app:
-            gr.HTML("<div align='center'><a href='https://github.com/vEduardovich/dodari' target='_blank'><img src='file/imgs/dodari.png' style='display:block;width:100px;'></a> <h1 style='margin-top:10px;'>AI 한영/영한 번역기 <span style='color:red'><a href='https://github.com/vEduardovich/dodari' target='_blank'>도다리</a></span> 입니다 </h1></div>")
+            gr.HTML("""
+            <div align='center'>
+                <a href='https://github.com/vEduardovich/dodari' target='_blank'>
+                <img src='file/imgs/dodari.png' style='display: block; width: 100px;'>
+                </a>
+                <h1 style='margin-top: 10px;'>AI 한영/영한 번역기
+                    <span style='color: red'>
+                    <a href='https://github.com/vEduardovich/dodari' target='_blank'>도다리</a>
+                    </span> 입니다.
+                </h1>
+            </div>
+            """)
             with gr.Row():
                 with gr.Column(scale=1, min_width=300):
                     with gr.Tab('순서 1'):
@@ -92,7 +103,13 @@ class Dodari:
                             interactive=True
                         )
 
-                        gr.HTML("<div style='text-align:right'><p style = 'color:grey;'>처음 실행 시 모델을 다운받는데 아주 오랜 시간이 걸립니다.</p><p style='color:grey;'>컴퓨터 사양이 좋다면 번역 속도가 빨라집니다.</p><p style='color:grey;'>맥 M1 이상에서는 MPS를 이용하여 가속합니다.</p></div>")
+                        gr.HTML("""
+                        <div style='text-align: right'>
+                            <p style='color: grey;'>처음 실행 시 모델을 다운받는데 아주 오랜 시간이 걸립니다.</p>
+                            <p style='color: grey;'>컴퓨터 사양이 좋다면 번역 속도가 빨라집니다.</p>
+                            <p style='color: grey;'>맥 M1 이상에서는 MPS를 이용하여 가속합니다.</p>
+                        </div>
+                        """)
 
                         with gr.Row():
                             status_msg = gr.Textbox(

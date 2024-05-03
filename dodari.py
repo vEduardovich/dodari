@@ -393,7 +393,7 @@ class Dodari:
         file_paths = []
         for root, _, files in os.walk(self.temp_folder_1):
             for file in files:
-                if file.endswith(('xhtml', 'html')):
+                if file.endswith(('xhtml', 'html', 'htm')):
                     file_paths.append(os.path.join(root, file))
 
         return file_paths

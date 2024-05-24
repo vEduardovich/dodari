@@ -119,7 +119,7 @@ _첫 실행시 관련 프로그램 설치와 AI 모델을 다운로드 하는데
 <br>
 
 [![Youtube](http://img.youtube.com/vi/hE-4hXLhlcg/0.jpg)](https://youtu.be/hE-4hXLhlcg)
-
+번역 영상
 
 <br>
 
@@ -178,7 +178,7 @@ dodari
 ## 도다리 고급번역
 - DeepL에 준하는 번역품질 (EEVE-Korean-Instruct-10.8B-v1.0 모델 사용)
 - AI추론 가속 기술(vllm)을 이용한 고속번역
-- _70분 자유번역하기_<a href='https://smartstore.naver.com/ai_dodari/products/10259679542' target='_blank'>(링크)</a>, _전자책 번역하기_<a href='https://smartstore.naver.com/ai_dodari/products/10259679542' target='_blank'>(링크)</a>, _텍스트 번역하기_<a href='https://smartstore.naver.com/ai_dodari/products/10259679542' target='_blank'>(링크)</a>
+- _전자책 번역하기_<a href='https://smartstore.naver.com/ai_dodari/products/10259679542' target='_blank'>(링크)</a>, _텍스트 번역하기_<a href='https://smartstore.naver.com/ai_dodari/products/10259679542' target='_blank'>(링크)</a>, _70분 자유번역하기_<a href='https://smartstore.naver.com/ai_dodari/products/10259679542' target='_blank'>(링크)</a>
 
 <br>
 

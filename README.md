@@ -119,7 +119,8 @@ _첫 실행시 관련 프로그램 설치와 AI 모델을 다운로드 하는데
 <br>
 
 [![Youtube](http://img.youtube.com/vi/hE-4hXLhlcg/0.jpg)](https://youtu.be/hE-4hXLhlcg)
-번역 영상
+<br>
+_번역영상_
 
 <br>
 

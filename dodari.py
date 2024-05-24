@@ -23,12 +23,11 @@ warnings.filterwarnings('ignore')
 nltk.download('punkt', quiet=True)
 
 PathType = Union[str, os.PathLike]
-
-
 class Dodari:
     def __init__(self, max_len: int = 512):
         self.max_len = max_len
         self.selected_files = []
+        
         
         self.upload_msg = None
         self.origin_lang_str = None
@@ -72,7 +71,7 @@ class Dodari:
                         gr.Markdown("<h3>1. 번역할 파일들 선택</h3>")
                         input_window = gr.File(
                             file_count="multiple",
-                            file_types=[".txt", ".epub"],
+                            file_types=[".txt", ".epub", ".srt"],
                             label='파일들'
                         )
                         lang_msg = gr.HTML(self.upload_msg)
@@ -82,6 +81,7 @@ class Dodari:
                             outputs=lang_msg,
                             preprocess=False
                         )
+                        
 
                 with gr.Column(scale=2):
                     with gr.Tab('순서 2'):
@@ -100,6 +100,9 @@ class Dodari:
                                 scale=4,
                                 value='번역 대기 중...'
                             )
+                            
+
+                            
                             translate_btn.click(fn=self.translateFn, outputs=status_msg)
                             
                             btn_openfolder = gr.Button(
@@ -167,7 +170,7 @@ class Dodari:
 
         origin_abb = self.origin_lang.split(sep='_')[0]
         target_abb = self.target_lang.split(sep='_')[0]
-
+        
         for file in progress.tqdm(self.selected_files, desc='파일로딩'):
             name, ext = os.path.splitext(file['orig_name'])
 
@@ -199,9 +202,12 @@ class Dodari:
                                 if ahtml_text:
                                     p_tag_1.name = 'p'
                                     p_tag_2.name = 'p'
-                                else: p_tags_1 = soup_1.find_all('p')
+                                
+                                
+                        p_tags_1 = soup_1.find_all('p')
                         p_tags_2 = soup_2.find_all('p')
 
+                    
                     for text_node_1, text_node_2 in progress.tqdm(zip(p_tags_1, p_tags_2), desc='단락 수'): 
                         if not text_node_1.text.strip(): continue
 
@@ -243,15 +249,17 @@ class Dodari:
                     output_file_1 = open(html_file, 'w', encoding='utf-8')
                     output_file_2 = open(html_file_2, 'w', encoding='utf-8')
 
-                    
                     output_file_1.write(str(soup_1))
                     output_file_2.write(str(soup_2))
                     output_file_1.close()
                     output_file_2.close()
 
+                
                 for loc_folder in [self.temp_folder_1, self.temp_folder_2]:
                     self.zip_folder(loc_folder, f'{loc_folder}.epub')
+                    
                 os.makedirs(self.output_folder, exist_ok=True)
+                
                 shutil.move(
                     f'{self.temp_folder_1}.epub',
                     os.path.join(self.output_folder, "{name}_{t2}({t3}){ext}".format(name=name, t2=target_abb, t3=origin_abb, ext=ext))
@@ -264,35 +272,64 @@ class Dodari:
                 self.remove_folder(self.temp_folder_1)
                 self.remove_folder(self.temp_folder_2)
 
-            else:
-                output_file_bi = self.write_filename(
-                    "{name}_{t2}({t3}){ext}".format(name=name, t2=target_abb, t3=origin_abb, ext = ext)
-                )
-                output_file = self.write_filename(
-                    "{name}_{t2}{ext}".format(name=name, t2=target_abb, ext = ext)
-                )
+            elif 'srt' in ext:
+                output_file_1, output_file_2, book = self.get_file_info(origin_abb, target_abb, name, ext, file)
+                srt_list = self.get_srt_list(book.read())
+                
+                result = ''
+                for line in progress.tqdm(srt_list, desc='문장'):
+                    output = translator(line['text'], max_length=self.max_len)
+                    translated_text = output[0]['translation_text']
+                    
+                    translated_text = translated_text.replace('.', '')
+                    result += f"{line['num']}\n{line['time']}\n{translated_text}\n\n"
+                    output_file_1.write( f"{line['num']}\n{line['time']}\n{translated_text} {line['text']}\n\n" )
+                    output_file_2.write(f"{line['num']}\n{line['time']}\n{translated_text}\n\n")
 
-                book = self.get_filename(file['path']);
-                book_list = book.split(sep='\n')
+                book.close()
+                
+            else:
+                output_file_1, output_file_2, book = self.get_file_info(origin_abb, target_abb, name, ext, file)
+
+                book_list = book.read().split(sep='\n')
                 for book in progress.tqdm(book_list, desc='단락'):
                     particle = nltk.sent_tokenize(book)
                     
+                    
                     for text in progress.tqdm(particle, desc='문장'):
                         output = translator(text, max_length=self.max_len)
-                        output_file_bi.write(
-                            "{t1} ({t2}) ".format(t1=output[0]['translation_text'], t2=text)
-                        )
-                        output_file.write(output[0]['translation_text'])
-                    output_file_bi.write('\n')
-                    output_file.write('\n')
-                output_file_bi.close()
-                output_file.close()
+                        translated_text = output[0]['translation_text']
+                        output_file_1.write( f"{translated_text} ({text}) " )
+                        output_file_2.write(f'{translated_text} ')
+                    output_file_1.write('\n')
+                    output_file_2.write('\n')
+                output_file_1.close()
+                output_file_2.close()
 
         sec = self.finalize_fn()
         
         return "번역 완료! 걸린 시간: {t1}".format(t1=sec)
+    def get_srt_list(self, srt_file):
+        srt_list_raw = srt_file.strip().split('\n')
+        len_srt = len(srt_list_raw)
 
-
+        srt_list = []
+        recent_num = 0
+        for len_idx in range(0, len_srt, 4):
+            
+            if not srt_list_raw[len_idx+2].strip(): continue
+            recent_num += 1
+            srt_list.append(
+                { 
+                    
+                    'num': recent_num, 
+                    'time' : srt_list_raw[len_idx+1],
+                    'text' : srt_list_raw[len_idx+2].strip(),
+                }
+            )
+        return srt_list
+        
+    
     def change_upload(self, files: List):
         try:
             self.selected_files = files
@@ -305,6 +342,7 @@ class Dodari:
                 if lang:
                     check_lang = lang[0][0]
                 else:
+                    print("언어 설정이 되어있지 않은 epub입니다. 사용 언어를 체크하기 위해서는 추가적인 작업이 필요합니다. 잠시만 기다려주세요.")
                     for item_idx, item in enumerate(file.get_items()):
                         if item.get_type() == ebooklib.ITEM_DOCUMENT:
                             soup = BeautifulSoup(item.get_body_content(), 'html.parser')
@@ -318,9 +356,18 @@ class Dodari:
                             else:
                                 return "<p style='text-align:center;color:red;'>표준 규격을 벗어난 epub입니다. <a href='https://moonlit.himion.com/info/contactUs'>이곳</a>을 이용해 해당 epub 파일을 첨부해서 보내주시면 바로 해결해드립니다. 번역에 실패했습니다.</p>"
 
+            elif '.srt' in ext:
+                srt_file = self.get_filename(aBook['path'])
+                srt_list = self.get_srt_list(srt_file.read())
+                srt_texts = ''
+                for srt in srt_list[:50]:
+                    srt_texts += ' ' + srt['text'] 
+                check_lang = detect(srt_texts[0:200])
+                srt_file.close()
             else:
-                book = self.get_filename(aBook['path']);
-                check_lang = detect(book[0:200])
+                book = self.get_filename(aBook['path'])
+                check_lang = detect(book.read()[0:200])
+                book.close()
 
             self.origin_lang_str = '영어' if 'en' in check_lang else "한국어"
             self.target_lang_str = '한국어' if 'en' in check_lang else "영어"
@@ -335,18 +382,29 @@ class Dodari:
     def get_filename(self, fileName):
         try:
             input_file = open(fileName, 'r', encoding='utf-8')
-            return input_file.read()
+            return input_file
         except:
             try:
                 input_file = open(fileName, 'r', encoding='euc-kr')
-                return input_file.read()
+                return input_file
             except :
                 input_file = open(fileName, 'r', encoding='cp949', errors='ignore')
-                return input_file.read()
+                return input_file
+    
+    def get_file_info(self, origin_abb, target_abb, name, ext, file):
+        output_file_1 = self.write_filename(
+            "{name}_{t2}({t3}){ext}".format(name=name, t2=target_abb, t3=origin_abb, ext = ext)
+        )
+        output_file_2 = self.write_filename(
+            "{name}_{t2}{ext}".format(name=name, t2=target_abb, ext = ext)
+        )
+
+        book = self.get_filename(file['path']);
+        return output_file_1, output_file_2, book
 
     def write_filename(self, file_name: str):
         saveDir = self.output_folder
-        if not(os.path.isdir(saveDir)): 
+        if not(os.path.isdir(saveDir)):
             os.makedirs(os.path.join(saveDir)) 
 
         file = os.path.join(saveDir, file_name)
@@ -355,6 +413,7 @@ class Dodari:
         return output_file
 
     def open_folder(self):
+        
         saveDir = self.output_folder
         command_to_open = ''
 
@@ -365,6 +424,7 @@ class Dodari:
         elif self.platform == 'Linux': command_to_open = f"nautilus {saveDir}"
         os.system(command_to_open)
         
+    
     def zip_extract(self, folder_path: PathType, epub_file: PathType):
         try:
             zip_module = zipfile.ZipFile(epub_file, 'r')
@@ -387,8 +447,10 @@ class Dodari:
 
         except Exception as err:
             print('epub 파일을 생성하는데 실패했습니다.')
+            print(err)
             pass
 
+    
     def get_html_list(self) -> List:
         file_paths = []
         for root, _, files in os.walk(self.temp_folder_1):

@@ -20,13 +20,19 @@ AI 한영/영한 번역기를<br> 일반 사람들도 쉽게 쓸수 있게 만�
 ## 번역 결과
 아래와 같이 두개의 파일이 만들어집니다. 
 
-<p align="center">도다리 번역 - 번역문(원문)파일</p>
+<p align="center">번역문(원문) 파일</p>
 <img src='https://github.com/vEduardovich/dodari/assets/20391482/10a0f93e-ce46-4303-ac7b-d5226b92dbfd' style='border-radius:10px;margin-right:10px;' title='한영 번역화면'/>
 
 <br>
 
-<p align="center" >도다리 번역 - 번역문파일</p>
+<p align="center" >번역문 파일</p>
 <img src='https://github.com/vEduardovich/dodari/assets/20391482/3ae95633-0c8e-4997-99fe-44151b845094' style='border-radius:10px;' title='한글 번역화면'/>
+
+<p align="center" >자막 번역</p>
+<div style='display:flex;'>
+<img src='https://github.com/vEduardovich/dodari/assets/20391482/9e00b100-aaa0-4829-bfad-7daa090961cc' style='border-radius:10px;' title='자막원본'/>
+<img src='https://github.com/vEduardovich/dodari/assets/20391482/c5e42280-98ac-4f54-8984-cccce1fa3cde' style='border-radius:10px;' title='자막번역'/>
+</div>
 
 <p align="center" >(참고) DeepL 번역</p>
 <p>"토끼굴 아래로 앨리스는 언니 옆에 앉아서 할 일이 없는 것에 매우 지치기 시작했고, 언니가 읽고 있는 책을 한두 번 들여다봤지만, 그 책에는 그림이나 대화가 없었습니다."그림이나 대화가 없는 책이 무슨 소용이 있을까?"앨리스는 생각했습니다. "그래서 그녀는 데이지 사슬을 만드는 즐거움이 일어나서 데이지를 따는 수고로움의 가치가 있는지, (더운 날이 그녀를 매우 졸리고 멍청하게 만들었 기 때문에 가능한 한 잘 생각했습니다) 마음 속으로 생각하고 있었는데 갑자기 분홍색 눈을 가진 하얀 토끼가 그녀 곁으로 달려갔습니다."거기에는 그렇게 놀라운 것도 없었고 앨리스도 토끼가 스스로 말하는 것을 듣는 것이 그렇게 매우 이상하게 생각하지 않았습니다."오 맙소사! 오, 이런! 너무 늦겠어!" (나중에 곰곰이 생각해보니 앨리스가 이걸 궁금해했어야 했다는 생각이 들었지만, 그 당시에는 모든 것이 아주 자연스러워 보였습니다)</p>

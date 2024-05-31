@@ -8,6 +8,7 @@ import platform
 import shutil
 import zipfile
 
+import chardet
 import ebooklib
 from ebooklib import epub
 from langdetect import detect
@@ -379,17 +380,14 @@ class Dodari:
         except Exception as err:
             return "<p style='text-align:center;color:red;'>어떤 언어인지 알아내는데 실패했습니다.</p>"
 
-    def get_filename(self, fileName):
+    def get_filename(self, file_name):
         try:
-            input_file = open(fileName, 'r', encoding='utf-8')
+            check_encoding = open(file_name, 'rb')
+            result = chardet.detect(check_encoding.read(10000))
+            input_file = open(file_name, 'r', encoding=result['encoding'])
             return input_file
         except:
-            try:
-                input_file = open(fileName, 'r', encoding='euc-kr')
-                return input_file
-            except :
-                input_file = open(fileName, 'r', encoding='cp949', errors='ignore')
-                return input_file
+            return None
     
     def get_file_info(self, origin_abb, target_abb, name, ext, file):
         output_file_1 = self.write_filename(

@@ -358,7 +358,7 @@ class Dodari:
                                 return "<p style='text-align:center;color:red;'>표준 규격을 벗어난 epub입니다. <a href='https://moonlit.himion.com/info/contactUs'>이곳</a>을 이용해 해당 epub 파일을 첨부해서 보내주시면 바로 해결해드립니다. 번역에 실패했습니다.</p>"
 
             elif '.srt' in ext:
-                srt_file = self.get_filename(aBook['path'])
+                srt_file = self.get_filename(aBook['path'], ext)
                 srt_list = self.get_srt_list(srt_file.read())
                 srt_texts = ''
                 for srt in srt_list[:50]:
@@ -366,7 +366,7 @@ class Dodari:
                 check_lang = detect(srt_texts[0:200])
                 srt_file.close()
             else:
-                book = self.get_filename(aBook['path'])
+                book = self.get_filename(aBook['path'], ext)
                 check_lang = detect(book.read()[0:200])
                 book.close()
 
@@ -380,13 +380,18 @@ class Dodari:
         except Exception as err:
             return "<p style='text-align:center;color:red;'>어떤 언어인지 알아내는데 실패했습니다.</p>"
 
-    def get_filename(self, file_name):
+    def get_filename(self, file_name, ext):
         try:
-            check_encoding = open(file_name, 'rb')
-            result = chardet.detect(check_encoding.read(10000))
-            input_file = open(file_name, 'r', encoding=result['encoding'])
+            if '.srt' in ext:
+                encoding = 'utf-8'
+            else:
+                check_encoding = open(file_name, 'rb')
+                result = chardet.detect(check_encoding.read(10000))
+                encoding = result['encoding']
+            input_file = open(file_name, 'r', encoding=encoding)
             return input_file
-        except:
+        except Exception as err:
+            print(err)
             return None
     
     def get_file_info(self, origin_abb, target_abb, name, ext, file):
@@ -397,7 +402,7 @@ class Dodari:
             "{name}_{t2}{ext}".format(name=name, t2=target_abb, ext = ext)
         )
 
-        book = self.get_filename(file['path']);
+        book = self.get_filename(file['path'], ext);
         return output_file_1, output_file_2, book
 
     def write_filename(self, file_name: str):

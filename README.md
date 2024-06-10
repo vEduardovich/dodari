@@ -187,7 +187,7 @@ dodari
 ## 도다리 고급번역
 - DeepL에 준하는 번역품질 (EEVE-Korean-Instruct-10.8B-v1.0 모델 사용)
 - AI추론 가속 기술(vllm)을 이용한 고속번역
-- _전자책 번역하기_<a href='https://smartstore.naver.com/ai_dodari/products/10259679542' target='_blank'>(링크)</a>, _텍스트 번역하기_<a href='https://smartstore.naver.com/ai_dodari/products/10259679542' target='_blank'>(링크)</a>, _70분 자유번역하기_<a href='https://smartstore.naver.com/ai_dodari/products/10259679542' target='_blank'>(링크)</a>
+- _전자책 번역하기_<a href='https://smartstore.naver.com/ai_dodari/products/10259674404' target='_blank'>(링크)</a>, _텍스트 번역하기_<a href='https://smartstore.naver.com/ai_dodari/products/10255090064' target='_blank'>(링크)</a>, _70분 자유번역하기_<a href='https://smartstore.naver.com/ai_dodari/products/10259679542' target='_blank'>(링크)</a>
 
 <br>
 

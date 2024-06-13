@@ -187,7 +187,7 @@ dodari
 ## 도다리 고급번역
 - DeepL에 준하는 번역품질 (EEVE-Korean-Instruct-10.8B-v1.0 모델 사용)
 - AI추론 가속 기술(vllm)을 이용한 고속번역
-- <a href='https://moonlit.himion.com/dodari' target='_blank'>도다리 고급번역 보러가기</u>
+- <a href='https://moonlit.himion.com/dodari&utm_campaign=goto_moonlit&utm_source=github&utm_medium=link&utm_content=dodari_landing_page' target='_blank'>도다리 고급번역 보러가기</u>
 
 <br>
 

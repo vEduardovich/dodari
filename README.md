@@ -2,7 +2,7 @@
 <img src='https://github.com/vEduardovich/dodari/assets/20391482/972aee6d-383e-47ed-90b6-73e0cc513973' title='도다리'/>
 <h1 align="center">도다리 Dodari</h1>
 <p align='center'>
-AI 한영/영한 번역기를<br> 일반 사람들도 쉽게 쓸수 있게 만든 로컬 웹서비스 입니다. (based on Gradio)</p>
+AI 한영/영한 번역기를<br> 일반 사람들도 쉽게 쓸수 있게 만든 로컬 웹서비스 입니다. (based on Gradio)
 </p>
 
 <br>
@@ -66,7 +66,7 @@ AI 한영/영한 번역기를<br> 일반 사람들도 쉽게 쓸수 있게 만�
 > - 윈도우는 start_windows.bat 실행
 > - 맥, 우분투는 sh start_mac.sh 실행
 
-_첫 실행시 관련 프로그램 설치와 AI 모델을 다운로드 하는데 아주 오랜 시간이 걸립니다!</span>_
+_첫 실행시 관련 프로그램 설치와 AI 모델을 다운로드 하는데 아주 오랜 시간이 걸립니다!_
 
 <br>
 

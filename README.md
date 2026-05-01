@@ -1,7 +1,7 @@
 <p align="center">
 <img src='https://private-user-images.githubusercontent.com/20391482/583777706-6b6a73f6-087c-439c-869f-5e0d0629db92.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Nzc1OTg4NTUsIm5iZiI6MTc3NzU5ODU1NSwicGF0aCI6Ii8yMDM5MTQ4Mi81ODM3Nzc3MDYtNmI2YTczZjYtMDg3Yy00MzljLTg2OWYtNWUwZDA2MjlkYjkyLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA1MDElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNTAxVDAxMjIzNVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWYwMzc0NGNmMjE2NTQ3Y2QzYmM5MzJlMzM2ODgyYmFhZmM1OGMxNTQ2ZTA1ZWQwYmRkODQzYWFjZGU2MzA3OTkmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9.GH4NS545uQeDvQA6LMm_N4cL1bj9vQFd7GP4lAjUcQw' width='200px' height='200px' title='도다리'/>
-<p align='center'>
 <h1 align="center">도다리 Dodari 2</h1>
+<p align='center'>
 도다리2는 구글의 최신 AI를 활용해 <br/>EPUB, PDF, TXT 문서를 장르와 문맥에 맞게 번역하는 다국어 번역기입니다.<br/>
 -------<br/>
 <span style='font-size:0.9em;'>*2024년 3월 도다리1 후속버전입니다</span><br/>

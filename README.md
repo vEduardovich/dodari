@@ -1,5 +1,5 @@
 <p align="center">
-<img src='https://private-user-images.githubusercontent.com/20391482/583777706-6b6a73f6-087c-439c-869f-5e0d0629db92.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Nzc1OTg4NTUsIm5iZiI6MTc3NzU5ODU1NSwicGF0aCI6Ii8yMDM5MTQ4Mi81ODM3Nzc3MDYtNmI2YTczZjYtMDg3Yy00MzljLTg2OWYtNWUwZDA2MjlkYjkyLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA1MDElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNTAxVDAxMjIzNVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWYwMzc0NGNmMjE2NTQ3Y2QzYmM5MzJlMzM2ODgyYmFhZmM1OGMxNTQ2ZTA1ZWQwYmRkODQzYWFjZGU2MzA3OTkmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9.GH4NS545uQeDvQA6LMm_N4cL1bj9vQFd7GP4lAjUcQw' width='200px' height='200px' title='도다리'/>
+<img src='https://github.com/user-attachments/assets/6b6a73f6-087c-439c-869f-5e0d0629db92' width='200px' height='200px' title='도다리'/>
 <h1 align="center">도다리 Dodari 2</h1>
 <p align='center'>
 도다리2는 구글의 최신 AI를 활용해 <br/>EPUB, PDF, TXT 문서를 장르와 문맥에 맞게 번역하는 다국어 번역기입니다.<br/>
@@ -8,7 +8,7 @@
 <span style='font-size:0.9em;'><b>*Apple Silicon Mac 전용</b>으로 최적화되었습니다.</span>
 </p>
 
-<img src='https://private-user-images.githubusercontent.com/20391482/586362240-2f27d751-b037-4204-8ffc-fd9e16b89015.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Nzc2MDIwNzksIm5iZiI6MTc3NzYwMTc3OSwicGF0aCI6Ii8yMDM5MTQ4Mi81ODYzNjIyNDAtMmYyN2Q3NTEtYjAzNy00MjA0LThmZmMtZmQ5ZTE2Yjg5MDE1LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA1MDElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNTAxVDAyMTYxOVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTVkNmJlY2E1OTNjY2UxZWZlZDdhZTdjMmJlZDI2YWY3Mjc1ZDU0NWNkODc0NDg2NDc5OTYxNzAyNzZlY2FhMWYmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9.KiwJeCNIhhc7EibFQLw1tCBDYitK6AYyh6FenZ_kYKg' title='도다리'/>
+<img src='https://github.com/user-attachments/assets/2f27d751-b037-4204-8ffc-fd9e16b89015' title='도다리'/>
 
 ### 주요기능
 1. `EPUB(전자책)`, `PDF`, `TXT` 번역. 
@@ -95,20 +95,18 @@ dodari/
 ## 상세 기능설명
 1. 도다리에 접속합니다. `http://127.0.0.1:7860`
 2. 순서1에 번역할 파일을 첨부합니다. 파일의 언어를 자동으로 감지합니다. 수동변경도 가능합니다.
-<img src='https://private-user-images.githubusercontent.com/20391482/586362255-22e4c9d3-5bf5-40f0-9712-6dfe326b54bf.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Nzc2MDQ0MTksIm5iZiI6MTc3NzYwNDExOSwicGF0aCI6Ii8yMDM5MTQ4Mi81ODYzNjIyNTUtMjJlNGM5ZDMtNWJmNS00MGYwLTk3MTItNmRmZTMyNmI1NGJmLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA1MDElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNTAxVDAyNTUxOVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTliYTViYjRlMmE1NmRlMmE5MDc1Y2FiYjc0MTk2MDNhNzU0OTZjMWFmMDZjMjc5OTRiNjZmMzJmZDNkNGQxZGEmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9._dSSPTZ5tuVSA0Zef_s2YC8vy3i550gbUoPH0tAmD2g'>
+<img src='https://github.com/user-attachments/assets/22e4c9d3-5bf5-40f0-9712-6dfe326b54bf'>
 3. 순서2에 번역 목표 언어를 선택합니다.
 4. 사용할 모델을 선택합니다. 기본선택 모델은 e4b모델입니다.
-<img src='https://private-user-images.githubusercontent.com/20391482/586362257-00ae73fb-dcf1-4200-8c3b-e561615eca3a.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Nzc2MDQ0MTksIm5iZiI6MTc3NzYwNDExOSwicGF0aCI6Ii8yMDM5MTQ4Mi81ODYzNjIyNTctMDBhZTczZmItZGNmMS00MjAwLThjM2ItZTU2MTYxNWVjYTNhLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA1MDElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNTAxVDAyNTUxOVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTc3ZGIxZjM5YTY1ZWY4Y2IyMjNhNjMwOTQ2ZDYxNTU5NzQ3ZmMzNGNmYzNhMmU5YzNjZTU5MGYwY2MzNDhkMTEmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9.W_1coO1DeaF96joYaIpto-YovKp54U5D4Kw1jy8YAR4'>
+<img src='https://github.com/user-attachments/assets/00ae73fb-dcf1-4200-8c3b-e561615eca3a'>
 5. 순서3에 번역출력 방식을 선택합니다. 번역문을 먼저 표기하고 원문을 뒤에 표기할지, 반대로 표기할지 결정하는 겁니다. 학습용으로 번역하실 경우 원문을 먼저 표기하고 번역문을 뒤에 표기하면 좋습니다.
 6. `~다`와 `~합니다` 어투를 결정합니다. 번역시 존댓말과 반말이 섞여 나오는 것을 방지합니다.
 7. 용어집을 만들수 있습니다. 선택후 `AI용어 자동추출`버튼을 클릭하면 책에서 쓰이는 주요 이름이나 용어들이 뽑아집니다. 원하실 경우 직접 추가 삭제 가능합니다. `용어집 적용` 버튼을 클릭시하시면 적용됩니다.
-<img src='https://private-user-images.githubusercontent.com/20391482/586362256-01b939af-a7cc-4ed5-8d91-19906a46cabd.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Nzc2MDU0MjAsIm5iZiI6MTc3NzYwNTEyMCwicGF0aCI6Ii8yMDM5MTQ4Mi81ODYzNjIyNTYtMDFiOTM5YWYtYTdjYy00ZWQ1LThkOTEtMTk5MDZhNDZjYWJkLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA1MDElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNTAxVDAzMTIwMFomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTdkMDY2ZTY5NjA0YzBkOWNlMzU4YjBkZGU4MGRmY2ZhNzdkN2UyN2E1MjA4ZWEyYzkyZTk0NzgxZTExZmQ1YzImWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9.rwLjxdVwnvLRx7VwuGko3K8ajhrNMYdd9ZVlJ083_CM'>
+<img src='https://github.com/user-attachments/assets/01b939af-a7cc-4ed5-8d91-19906a46cabd'>
 8. 마지막입니다. 순서4에서 `번역 실행하기`를 누르면 번역을 시작합니다.
-<img src='https://private-user-images.githubusercontent.com/20391482/586362254-c74fc2f5-c83d-4427-927b-5d3ee3e0849b.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Nzc2MDU0MjAsIm5iZiI6MTc3NzYwNTEyMCwicGF0aCI6Ii8yMDM5MTQ4Mi81ODYzNjIyNTQtYzc0ZmMyZjUtYzgzZC00NDI3LTkyN2ItNWQzZWUzZTA4NDliLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA1MDElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNTAxVDAzMTIwMFomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTYyOTU2MTMxYzY2OGE4NzcxMzI4YmM3NDg0ZDdlNWRhNmFmNmViNWVjZDJlOTUwNjAwYTRhYmU5OWMyNTVlMGEmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9.9P0u_YQ45ymseNEBB1Z4GuCTBiKUUcvc-vcCKB-evwg'>
+<img src='https://github.com/user-attachments/assets/c74fc2f5-c83d-4427-927b-5d3ee3e0849b'>
 
 <br/>
-
-
 
 ## 삭제하기
 ### 1. 프로그램 삭제

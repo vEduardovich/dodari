@@ -5,6 +5,7 @@ import base64
 from typing import List, Union, Sequence
 from datetime import timedelta
 import logging, warnings
+import copy
 import re, time, platform, shutil, zipfile, subprocess
 import requests
 import chardet
@@ -45,6 +46,22 @@ def cleanup_llm_server():
     os.system("pkill -f 'mlx_vlm.server'")
 
 atexit.register(cleanup_llm_server)
+
+def format_korean_time(seconds: int) -> str:
+    """초(int)를 '1시간 2분 30초' 형태의 한국어 문자열로 변환. 0인 단위는 생략."""
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f'{seconds}초'
+    minutes, sec = divmod(seconds, 60)
+    if minutes < 60:
+        return f'{minutes}분 {sec}초' if sec else f'{minutes}분'
+    hours, min_ = divmod(minutes, 60)
+    parts = [f'{hours}시간']
+    if min_:
+        parts.append(f'{min_}분')
+    if sec:
+        parts.append(f'{sec}초')
+    return ' '.join(parts)
 
 logging.getLogger().disabled = True
 logging.raiseExceptions = False
@@ -147,7 +164,7 @@ class Dodari:
                     </a>
                     <h1 style='margin-top: 10px;'>
                     AI 다국어 번역기 <span style='color: red;'>
-                        <a href='https://github.com/vEduardovich/dodari' target='_blank' style='text-decoration: none; color: red;'>도다리</a>
+                        <a href='https://github.com/vEduardovich/dodari' target='_blank' style='text-decoration: none; color: red;'>도다리2</a>
                     </span> 입니다
                     </h1>
                 </div>
@@ -199,7 +216,7 @@ class Dodari:
                         self.bilingual_order_radio = gr.Radio(
                             choices=["번역문(원문)", "원문(번역문)"],
                             value="번역문(원문)",
-                            label="이중언어 표기 방식 (공부용은 '원문(번역문)' 추천)"
+                            label="이중언어 표기 방식 (학습용은 '원문(번역문)' 추천)"
                         )
                         self.genre_radio = gr.Radio(
                             choices=["IT 및 엔지니어링", "문학 및 소설", "인문 및 사회과학", "비즈니스 및 경제", "영상 및 대본", "일반 문서(기본)"],
@@ -576,6 +593,12 @@ class Dodari:
                         soup_1 = BeautifulSoup(input_file_1.read(), 'html.parser')
                         soup_2 = BeautifulSoup(input_file_2.read(), 'html.parser')
 
+                        # epub:type="index/toc/cover/lot/loi" 페이지는 색인·표지·목차이므로 번역 스킵
+                        _skip_epub_types = {'index', 'toc', 'cover', 'lot', 'loi'}
+                        _body_tag = soup_1.find('body')
+                        if _body_tag and _skip_epub_types.intersection((_body_tag.get('epub:type') or '').split()):
+                            continue
+
                         # EPUB의 다양한 태그 구조에서 실제 텍스트를 담고 있는 리프 노드만 추출
                         # h1~h6(제목), li(목차), span(인라인 강조) 등 EPUB_TRANSLATE_TAGS 전체 탐색
                         # 리프 노드 조건: 텍스트가 존재하고 하위에 다른 블록 태그를 포함하지 않는 것만
@@ -584,17 +607,25 @@ class Dodari:
                             tag for tag in soup_1.find_all(EPUB_TRANSLATE_TAGS)
                             if tag.get_text(strip=True)
                             and not tag.find(_leaf_filter)
+                            and not (tag.name == 'span' and tag.parent and tag.parent.name in EPUB_TRANSLATE_TAGS)
                         ]
                         p_tags_2 = [
                             tag for tag in soup_2.find_all(EPUB_TRANSLATE_TAGS)
                             if tag.get_text(strip=True)
                             and not tag.find(_leaf_filter)
+                            and not (tag.name == 'span' and tag.parent and tag.parent.name in EPUB_TRANSLATE_TAGS)
                         ]
 
                         # 1. 번역할 문구들만 빼온다
                         only_texts = []  # 줄바꿈이 빠진 오직 원문 텍스트만
                         whole_particle = []  # particle 리스트들을 모두 합친 리스트
-                        for text_node_1, text_node_2 in progress.tqdm(zip(p_tags_1, p_tags_2), desc='단락수'):
+                        _ch_elapsed = format_korean_time(int(time.time() - self.start))
+                        for text_node_1, text_node_2 in progress.tqdm(zip(p_tags_1, p_tags_2), desc=f'단락 번역 중 (경과: {_ch_elapsed})'):
+                            # doc-backlink: 단락 전체가 역참조 링크만일 때만 스킵 (본문 내용 혼재 시 번역)
+                            _bl = text_node_1.find('a', attrs={'role': 'doc-backlink'})
+                            if _bl and text_node_1.get_text(strip=True) == _bl.get_text(strip=True):
+                                whole_particle.append(0)
+                                continue
                             text_str = text_node_1.text.strip()
                             # [핵심 변경] 단어 1~2개 짧은 텍스트도 번역 대상 — Gemma 4는 환각 없이 처리 가능
                             # 알파벳/한글이 1자도 없는 경우(순수 숫자·특수문자)와 1글자 이하만 스킵
@@ -602,7 +633,11 @@ class Dodari:
                                 whole_particle.append(0)
                                 continue
 
-                            particle = nltk.sent_tokenize(text_node_1.text)
+                            raw_particle = nltk.sent_tokenize(text_node_1.text)
+                            particle = [s for s in raw_particle if sum(1 for c in s if c.isalpha()) >= 2]
+                            if not particle:
+                                whole_particle.append(0)
+                                continue
                             only_texts.extend(particle)
                             particle.append(0)
                             whole_particle.extend(particle)
@@ -637,16 +672,19 @@ class Dodari:
                             p_tag_1 = soup_1.new_tag(text_node_1.name)
                             p_tag_2 = soup_2.new_tag(text_node_2.name)
 
-                            try:
-                                if text_node_1.attrs and text_node_1.attrs['class']:
-                                    p_tag_1['class'] = text_node_1.attrs['class']
-                                    p_tag_2['class'] = text_node_1.attrs['class']
-                            except:
-                                pass
+                            # 모든 속성 복사 (class, id, style 등) — id 누락 시 TOC 내부 링크 깨짐
+                            for _attr, _val in text_node_1.attrs.items():
+                                p_tag_1[_attr] = _val
+                                p_tag_2[_attr] = _val
 
                             if text_node_1.text.strip():  # 번역할 문구가 있을때만 string을 바꾼다. ★★★ p태그안에 img가 있을때 살려야하기 때문이다
                                 p_tag_1.string = p_1
                                 p_tag_2.string = p_2
+                                # 빈 앵커 마커 복원 — 텍스트 없는 <a>는 TOC 점프 대상, 잃으면 링크 깨짐
+                                for _empty_a in reversed(text_node_1.find_all('a')):
+                                    if not _empty_a.get_text(strip=True):
+                                        p_tag_1.insert(0, copy.copy(_empty_a))
+                                        p_tag_2.insert(0, copy.copy(_empty_a))
                                 img_tag = text_node_1.find('img')
                                 if img_tag:
                                     print('이미지 태그도 추가해준다')
@@ -985,7 +1023,10 @@ class Dodari:
                         if re.match(r'^\d+\s+https?://', text):
                             continue
                         if len(text) > 1 and any(c.isalpha() for c in text):
-                            sentences = nltk.sent_tokenize(text)
+                            raw_sentences = nltk.sent_tokenize(text)
+                            sentences = [s for s in raw_sentences if sum(1 for c in s if c.isalpha()) >= 2]
+                            if not sentences:
+                                continue
                             only_texts.extend(sentences)
 
                             p_with_marker = list(sentences)
@@ -996,7 +1037,7 @@ class Dodari:
                             valid_tags_2.append(tags_2[t_idx])
                             
                     if only_texts:
-                        progress(0, desc='[PDF] 문맥 기반 텍스트 배치 번역 중...')
+                        progress(0.7, desc=f'[PDF] 문맥 기반 텍스트 배치 번역 중... (경과: {format_korean_time(int(time.time() - self.start))})')
                         # Yanolja LLM 배칭 번역 호출 (EPUB과 동일하게 문장 단위로 넘김)
                         parti_1, parti_2 = self.batch_translate_engine(only_texts, whole_particle, 'epub', genre_val, tone_val, bilingual_order_val)
 
@@ -1031,7 +1072,7 @@ class Dodari:
                             valid_tags_2[t_idx].string = trans_2
                             
                     # 3. EPUB 파일로 패키징 (Base64 이미지 분리 후 ebooklib으로 빌드)
-                    progress(0, desc='[PDF] EPUB 패키징 중...')
+                    progress(0.95, desc=f'[PDF] EPUB 패키징 중... (경과: {format_korean_time(int(time.time() - self.start))})')
                     # 원문(번역문) 모드면 파일명도 원문 언어가 앞에 오도록 표기
                     if bilingual_order_val == "원문(번역문)":
                         done_path_1 = os.path.join(self.output_folder, f"{name}_{origin_abb}({target_abb}).epub")
@@ -1384,12 +1425,21 @@ class Dodari:
         print(f'▶ 번역 시작: {total}문장 → {total_chunks}배치 × 동시{self.translate_workers}개')
         t_start = time.time()
 
-        # (인덱스, 전체배치수, 청크) 튜플로 묶어 래퍼에 전달 — 완료 즉시 로그 출력
-        with ThreadPoolExecutor(max_workers=self.translate_workers) as executor:
-            chunk_results = list(executor.map(
-                self._process_translation_batch,
-                [(i, total_chunks, c, genre_val, tone_val) for i, c in enumerate(chunks)]
-            ))
+        # translate_workers 단위로 그룹을 나눠 순차 처리 — 그룹 간 GPU 캐시·GC 강제 해제
+        chunk_results = []
+        for _g_start in range(0, total_chunks, self.translate_workers):
+            _group = chunks[_g_start: _g_start + self.translate_workers]
+            _args = [(_g_start + i, total_chunks, c, genre_val, tone_val) for i, c in enumerate(_group)]
+            with ThreadPoolExecutor(max_workers=len(_group)) as executor:
+                _group_results = list(executor.map(self._process_translation_batch, _args))
+            chunk_results.extend(_group_results)
+            gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except ImportError:
+                pass
 
         # 배치별 결과를 원래 순서대로 하나의 리스트로 합친다
         translated_list = [item for sublist in chunk_results for item in sublist]

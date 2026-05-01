@@ -1,143 +1,75 @@
+<h1 align="center">도다리 Dodari 2</h1>
 <p align="center">
-<img src='https://github.com/vEduardovich/dodari/assets/20391482/972aee6d-383e-47ed-90b6-73e0cc513973' title='도다리'/>
-<h1 align="center">도다리 Dodari</h1>
+<img src='https://private-user-images.githubusercontent.com/20391482/583777706-6b6a73f6-087c-439c-869f-5e0d0629db92.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Nzc1OTg4NTUsIm5iZiI6MTc3NzU5ODU1NSwicGF0aCI6Ii8yMDM5MTQ4Mi81ODM3Nzc3MDYtNmI2YTczZjYtMDg3Yy00MzljLTg2OWYtNWUwZDA2MjlkYjkyLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA1MDElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNTAxVDAxMjIzNVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPWYwMzc0NGNmMjE2NTQ3Y2QzYmM5MzJlMzM2ODgyYmFhZmM1OGMxNTQ2ZTA1ZWQwYmRkODQzYWFjZGU2MzA3OTkmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9.GH4NS545uQeDvQA6LMm_N4cL1bj9vQFd7GP4lAjUcQw' width='200px' height='200px' title='도다리'/>
 <p align='center'>
-AI 다국어 번역기를<br> 일반 사람들도 쉽게 쓸수 있게 만든 로컬 웹서비스 입니다. (based on Gradio)
+도다리2는 구글의 최신 AI를 활용해 <br/>EPUB, PDF, TXT 문서를 장르와 문맥에 맞게 번역하는 다국어 번역기입니다.<br/>
+-------<br/>
+<span style='font-size:0.9em;'>*2024년 3월 도다리1 후속버전입니다</span><br/>
+<span style='font-size:0.9em;'><b>*Apple Silicon Mac 전용</b>으로 최적화되었습니다.</span>
 </p>
 
-<br>
+<img src='https://private-user-images.githubusercontent.com/20391482/586362240-2f27d751-b037-4204-8ffc-fd9e16b89015.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Nzc2MDIwNzksIm5iZiI6MTc3NzYwMTc3OSwicGF0aCI6Ii8yMDM5MTQ4Mi81ODYzNjIyNDAtMmYyN2Q3NTEtYjAzNy00MjA0LThmZmMtZmQ5ZTE2Yjg5MDE1LnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA1MDElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNTAxVDAyMTYxOVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTVkNmJlY2E1OTNjY2UxZWZlZDdhZTdjMmJlZDI2YWY3Mjc1ZDU0NWNkODc0NDg2NDc5OTYxNzAyNzZlY2FhMWYmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9.KiwJeCNIhhc7EibFQLw1tCBDYitK6AYyh6FenZ_kYKg' title='도다리'/>
 
-## 특징
-자신의 컴퓨터에서 제한없이 `한영`-`영한` AI 번역이 가능합니다. 
-- 일반 구글번역에 비해 품질이 우수합니다.
-- `txt`와 `epub(전자책)`, `srt(자막)` 번역이 가능합니다.
-- `번역문(원문)` 파일과 `번역문` 파일, 이렇게 두가지 파일로 출력합니다. `번역문(원문)`의 경우 번역이 이상할 경우 원문과 바로 비교할수 있습니다.
-- 사용이 아주 쉽습니다. 번역이 필요한 파일들을 드래그한 후 `번역 실행하기` 버튼만 클릭하면 됩니다. 알아서 `한↔영` 으로 번역해 줍니다.
-<img src='https://github.com/user-attachments/assets/6b6a73f6-087c-439c-869f-5e0d0629db92' style='display:block;border-radius:10px;text-align:center;' title='도다리 실행화면'/>
+### 주요기능
+1. `EPUB(전자책)`, `PDF`, `TXT` 번역. 
+2. _주의!_ 레이아웃 보존을 위해 `PDF`의 번역 결과는 더 이상 `PDF`가 아닌, `EPUP`으로 형식이 바뀌어 저장됨. 
+3. `번역문(원문)` 파일과 `번역문` 파일, 두가지 파일로 출력. 문장단위로 원문과 비교가능.
+4. 언어 자동감지 기능
+5. `한국어` · `영어` · `일본어` · `중국어` · `프랑스어` · `이탈리아어` · `네덜란드어` · `덴마크어` · `스웨덴어` · `노르웨이어` · `아랍어` · `페르시아어` 교차 번역 가능
+6. 도서 장르 자동감지
+7. 번역 문체 선택 가능
+8. 용어집 - AI가 추출한 주요 용어(이름)등을 일관성있게 적용 가능
+9. 용량 무제한
 
-<br>
+<br/>
 
-## 번역 결과
-아래와 같이 두개의 파일이 만들어집니다. 
+### 구동 사양
+| AI모델 | Gemma4 e4b 8bit | Gemma4 31b 4bit |
+|:---|:---|:---|
+| 추천 사양 | 최소 (기본품질) | 권장 (고품질) |
+| 모델 설명 | 빠르고 쾌적한 번역 | 깊은 문맥 파악 풍부한 단어선택 |
+| 주관적 느낌 | Deepl보다 좋은것같음 | 제미나이만큼 좋은거 같음 |
+| 칩 | Apple Silicon M1 이상 | M3 Pro / M4 Max 이상 |
+| 통합 메모리 | **8GB~16GB** | **32GB** |
+| 저장 공간 | 10GB 이상 여유 | SSD 35GB 이상 |
+| macOS | Ventura 13.0 이상 | 최신 버전 권장 |
+| Python | 3.11 이상 | — |
 
-<p align="center">번역문(원문) 파일</p>
-<img src='https://github.com/vEduardovich/dodari/assets/20391482/10a0f93e-ce46-4303-ac7b-d5226b92dbfd' style='border-radius:10px;margin-right:10px;' title='한영 번역화면'/>
-
-<br>
-
-<p align="center" >번역문 파일</p>
-<img src='https://github.com/vEduardovich/dodari/assets/20391482/3ae95633-0c8e-4997-99fe-44151b845094' style='border-radius:10px;' title='한글 번역화면'/>
-
-<br>
-
-
-<p align="center">자막 번역</p>
-<p align="center">
-<img src='https://github.com/vEduardovich/dodari/assets/20391482/a4f1e7b4-5925-413a-a9f4-93248b106c27' style='border-radius:10px;' title='한글 자막번역'/>
-</p>
-
-<p align="center" >(참고) DeepL 번역</p>
-<p>"토끼굴 아래로 앨리스는 언니 옆에 앉아서 할 일이 없는 것에 매우 지치기 시작했고, 언니가 읽고 있는 책을 한두 번 들여다봤지만, 그 책에는 그림이나 대화가 없었습니다."그림이나 대화가 없는 책이 무슨 소용이 있을까?"앨리스는 생각했습니다. "그래서 그녀는 데이지 사슬을 만드는 즐거움이 일어나서 데이지를 따는 수고로움의 가치가 있는지, (더운 날이 그녀를 매우 졸리고 멍청하게 만들었 기 때문에 가능한 한 잘 생각했습니다) 마음 속으로 생각하고 있었는데 갑자기 분홍색 눈을 가진 하얀 토끼가 그녀 곁으로 달려갔습니다."거기에는 그렇게 놀라운 것도 없었고 앨리스도 토끼가 스스로 말하는 것을 듣는 것이 그렇게 매우 이상하게 생각하지 않았습니다."오 맙소사! 오, 이런! 너무 늦겠어!" (나중에 곰곰이 생각해보니 앨리스가 이걸 궁금해했어야 했다는 생각이 들었지만, 그 당시에는 모든 것이 아주 자연스러워 보였습니다)</p>
-<p align="center" >(참고) 구글 번역</p>
-<p>“앨리스는 은행에서 여동생 옆에 앉아 있고 할 일이 없는 것에 매우 지치기 시작했습니다. 한두 번 그녀는 여동생이 읽고 있는 책을 들여다 보았지만 그 안에 그림이나 대화가 전혀 없었습니다. "그림이나 대화가 없는 책이 무슨 소용이 있겠는가?"라고 앨리스는 생각했습니다. 데이지 체인을 만드는 즐거움이 일어나서 데이지를 따는 수고를 할 만큼 가치가 있을지에 대해 그녀 자신의 마음 속에서 (그리고 그녀는 할 수 있는 한, 더운 날 때문에 그녀는 매우 졸리고 멍청하다고 느꼈다) 갑자기 백인이 분홍색 눈을 가진 토끼가 그녀 옆으로 달려왔습니다. 그다지 주목할만한 점은 없었습니다. 앨리스는 토끼가 혼잣말하는 것을 듣고도 별로 이상하다고 생각하지 않았습니다. “오 이런! 이런! 너무 늦을 것 같아요!” (나중에 그녀가 곰곰이 생각해보니, 그녀는 이것에 대해 궁금해했어야 했다는 생각이 들었지만, 당시에는 모든 것이 아주 자연스러워 보였습니다.)</p>
-
-<br>
+<br/>
 
 ## 설치 및 실행
-공통,
-> 1. **먼저 파이썬이 설치되어 있어야 합니다.** 윈도우에는 파이썬이 기본으로 설치되어 있지 않습니다.
-> 2. https://wikidocs.net/8 를 참고하여 쉽게 설치하실수 있습니다.
-
-<br>
 
 초보자라면,
-1. <a href='https://github.com/vEduardovich/dodari/archive/refs/heads/main.zip' title='압축 파일 다운로드' style='text-align:center'>압축 파일 다운로드</a> 클릭
+1. <a href='' title='압축 파일 다운로드' style='text-align:center'>압축 파일 다운로드</a> 클릭
 2. 압축해제 후 
-> - 윈도우 사용자는 start_windows.bat 더블 클릭
-> - 맥이나 우분투 사용자는 터미널 창에서 sh start_mac.sh 실행
-3. 처음 실행이라면 프로그램을 자동으로 설치한 후 실행합니다. 이미 설치가 되었다면 바로 실행합니다.
 
-<br>
-
-고급 사용자라면,
-1. git clone https://github.com/vEduardovich/dodari.git
-2. cd dodari
-3. 아래 방법으로 실행하기
-> - 윈도우는 start_windows.bat 실행
-> - 맥, 우분투는 sh start_mac.sh 실행
+```bash
+sh start_mac.sh
+```
+3.  `http://127.0.0.1:7860` 에 접속하면 도다리2가 보입니다.
 
 _첫 실행시 관련 프로그램 설치와 AI 모델을 다운로드 하는데 아주 오랜 시간이 걸립니다!_
+_에러 발생시 dodari_env폴더 삭제후 다시 실행해보세요._
 
 <br>
+고급 사용자라면,
 
-## 번역 속도 비교
-헤르만 헤세의 싯다르타 text과 이상한 나라의 앨리스(영문판).epub을 번역해봤습니다.
-<table>
-  <thead>
-    <tr>
-      <th>사양</th>
-      <th>운영체제</th>
-      <th>CPU</th>
-      <th>GPU</th>
-      <th>싯다르타.txt (378kb, 2577문장)</th>
-      <th>이상한나라의 앨리스.epub</th>
-      <th>srt 자막 (128kb, 1846문장)</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>LG 2020 그램 17</td>
-      <td>윈도우10</td>
-      <td>i7 (1.3GHz)</td>
-      <td>내장그래픽</td>
-      <td>2시간 55분 24초</td>
-      <td>3시간 45분 6초</td>
-      <td>42분 32초</td>
-    </tr>
-    <tr>
-      <td>Mac Pro M1</td>
-      <td>iOS</td>
-      <td>10코어</td>
-      <td>16코어</td>
-      <td>54분 23초</td>
-      <td>1시간 13분 5초</td>
-      <td>8분 27초</td>
-    </tr>
-    <tr>
-      <td>데스크탑</td>
-      <td>Ubuntu22.04</td>
-      <td>i9-13900k</td>
-      <td>RTX4090 24GB</td>
-      <td>5분 25초</td>
-      <td>7분 20초</td>
-      <td>2분 8초</td>
-    </tr>
-    <tr>
-      <td>데스크탑</td>
-      <td>윈도우11</td>
-      <td>i9-13900k</td>
-      <td>RTX4090 24GB</td>
-      <td>11분 49초</td>
-      <td>14분 36초</td>
-      <td>2분 35초</td>
-    </tr>
-  </tbody>
-</table>
-
-<br>
-
-[![Youtube](http://img.youtube.com/vi/hE-4hXLhlcg/0.jpg)](https://youtu.be/hE-4hXLhlcg)
-<br>
-_번역영상_
-
-<br>
-
-## 디렉토리 구조
+```bash
+git clone https://github.com/vEduardovich/dodari.git
+cd dodari
+sh start_mac.sh
 ```
-dodari
-├⎯ models : AI가 다운로드되는 폴더
-├⎯ venv   : 도다리 실행을 위한 관련 파일들이 설치되는 폴더
-├⎯ imgs   : 도다리 이미지
+
+<br/>
+
+## 프로젝트 구조
+
+```
+dodari/
+├── dodari_env         # 도다리 실행을 위한 관련 파일들이 설치되는 폴더
+├── dodari.py          # 메인 애플리케이션
+├── start_mac.sh       # 실행 스크립트
+└── requirements.txt   # 의존성 목록
 ```
 
 <br>
@@ -152,51 +84,53 @@ dodari
 
 <br>
 
+## 번역속도 체감
+1. m5max는 워낙 고사양이니 m1pro의 속도만 보시면 됩니다.
+2. 소설은 텍스트 뿐이라 epub이나 pdf나 번역속도가 비슷합니다.
+3. 그림이나 코드가 많은 책은 pdf 번역속도가 더 빠릅니다. 왜 그런지 저도 잘 모르겠습니다. epub의 경우 표와 상세 플래그까지 모두 번역해서 그런게 아닌가 예상은 합니다. pdf는 이미지로 그냥 잘라낸후 번역없이 첨부하거든요.
+<table style="table-layout:auto"><thead><tr><th rowspan="2">책</th><th rowspan="2">맥북</th><th colspan="2">epub</th><th colspan="2">pdf</th></tr><tr><th>기본e4b</th><th>고급31b</th><th>기본e4b</th><th>고급31b</th></tr></thead><tbody><tr><td rowspan="2">1984<br/>(소설)</td><td>m1pro 16g</td><td>133분</td><td>-</td><td>133분</td><td>-</td></tr><tr><td>m5max 128g</td><td>40분</td><td>135분</td><td>41분</td><td>136분</td></tr><tr><td rowspan="2">Pro Git<br/>(IT서적)</td><td>m1pro 16g</td><td>137분</td><td>-</td><td>65분</td><td>-</td></tr><tr><td>m5max 128g</td><td>45분</td><td>159분</td><td>21분</td><td>81분</td></tr></tbody></table>
+
+<br/>
+
+## 상세 기능설명
+1. 도다리에 접속합니다. `http://127.0.0.1:7860`
+2. 순서1에 번역할 파일을 첨부합니다. 파일의 언어를 자동으로 감지합니다. 수동변경도 가능합니다.
+<img src='https://private-user-images.githubusercontent.com/20391482/586362255-22e4c9d3-5bf5-40f0-9712-6dfe326b54bf.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Nzc2MDQ0MTksIm5iZiI6MTc3NzYwNDExOSwicGF0aCI6Ii8yMDM5MTQ4Mi81ODYzNjIyNTUtMjJlNGM5ZDMtNWJmNS00MGYwLTk3MTItNmRmZTMyNmI1NGJmLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA1MDElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNTAxVDAyNTUxOVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTliYTViYjRlMmE1NmRlMmE5MDc1Y2FiYjc0MTk2MDNhNzU0OTZjMWFmMDZjMjc5OTRiNjZmMzJmZDNkNGQxZGEmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9._dSSPTZ5tuVSA0Zef_s2YC8vy3i550gbUoPH0tAmD2g'>
+3. 순서2에 번역 목표 언어를 선택합니다.
+4. 사용할 모델을 선택합니다. 기본선택 모델은 e4b모델입니다.
+<img src='https://private-user-images.githubusercontent.com/20391482/586362257-00ae73fb-dcf1-4200-8c3b-e561615eca3a.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Nzc2MDQ0MTksIm5iZiI6MTc3NzYwNDExOSwicGF0aCI6Ii8yMDM5MTQ4Mi81ODYzNjIyNTctMDBhZTczZmItZGNmMS00MjAwLThjM2ItZTU2MTYxNWVjYTNhLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA1MDElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNTAxVDAyNTUxOVomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTc3ZGIxZjM5YTY1ZWY4Y2IyMjNhNjMwOTQ2ZDYxNTU5NzQ3ZmMzNGNmYzNhMmU5YzNjZTU5MGYwY2MzNDhkMTEmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9.W_1coO1DeaF96joYaIpto-YovKp54U5D4Kw1jy8YAR4'>
+5. 순서3에 번역출력 방식을 선택합니다. 번역문을 먼저 표기하고 원문을 뒤에 표기할지, 반대로 표기할지 결정하는 겁니다. 학습용으로 번역하실 경우 원문을 먼저 표기하고 번역문을 뒤에 표기하면 좋습니다.
+6. `~다`와 `~합니다` 어투를 결정합니다. 번역시 존댓말과 반말이 섞여 나오는 것을 방지합니다.
+7. 용어집을 만들수 있습니다. 선택후 `AI용어 자동추출`버튼을 클릭하면 책에서 쓰이는 주요 이름이나 용어들이 뽑아집니다. 원하실 경우 직접 추가 삭제 가능합니다. `용어집 적용` 버튼을 클릭시하시면 적용됩니다.
+<img src='https://private-user-images.githubusercontent.com/20391482/586362256-01b939af-a7cc-4ed5-8d91-19906a46cabd.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Nzc2MDU0MjAsIm5iZiI6MTc3NzYwNTEyMCwicGF0aCI6Ii8yMDM5MTQ4Mi81ODYzNjIyNTYtMDFiOTM5YWYtYTdjYy00ZWQ1LThkOTEtMTk5MDZhNDZjYWJkLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA1MDElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNTAxVDAzMTIwMFomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTdkMDY2ZTY5NjA0YzBkOWNlMzU4YjBkZGU4MGRmY2ZhNzdkN2UyN2E1MjA4ZWEyYzkyZTk0NzgxZTExZmQ1YzImWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9.rwLjxdVwnvLRx7VwuGko3K8ajhrNMYdd9ZVlJ083_CM'>
+8. 마지막입니다. 순서4에서 `번역 실행하기`를 누르면 번역을 시작합니다.
+<img src='https://private-user-images.githubusercontent.com/20391482/586362254-c74fc2f5-c83d-4427-927b-5d3ee3e0849b.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3Nzc2MDU0MjAsIm5iZiI6MTc3NzYwNTEyMCwicGF0aCI6Ii8yMDM5MTQ4Mi81ODYzNjIyNTQtYzc0ZmMyZjUtYzgzZC00NDI3LTkyN2ItNWQzZWUzZTA4NDliLnBuZz9YLUFtei1BbGdvcml0aG09QVdTNC1ITUFDLVNIQTI1NiZYLUFtei1DcmVkZW50aWFsPUFLSUFWQ09EWUxTQTUzUFFLNFpBJTJGMjAyNjA1MDElMkZ1cy1lYXN0LTElMkZzMyUyRmF3czRfcmVxdWVzdCZYLUFtei1EYXRlPTIwMjYwNTAxVDAzMTIwMFomWC1BbXotRXhwaXJlcz0zMDAmWC1BbXotU2lnbmF0dXJlPTYyOTU2MTMxYzY2OGE4NzcxMzI4YmM3NDg0ZDdlNWRhNmFmNmViNWVjZDJlOTUwNjAwYTRhYmU5OWMyNTVlMGEmWC1BbXotU2lnbmVkSGVhZGVycz1ob3N0JnJlc3BvbnNlLWNvbnRlbnQtdHlwZT1pbWFnZSUyRnBuZyJ9.9P0u_YQ45ymseNEBB1Z4GuCTBiKUUcvc-vcCKB-evwg'>
+
+<br/>
+
+
+
 ## 삭제하기
-- 폴더 전체를 지우면 깨끗하게 지워집니다.
+### 1. 프로그램 삭제
+다운로드한 `dodari` 폴더 전체를 지웁니다.
 
-<br>
-<br>
+### 2. AI모델 삭제
+`~/.cache/huggingface/hub` 아래의 폴더들을 삭제합니다.
 
-## 도다리 일반번역과 고급번역의 차이
-- 도다리 일반번역은 가성비가 가장 좋은 <a href='https://huggingface.co/NHNDQ/nllb-finetuned-en2ko' target='_blank'>NHNDQ</a>를 사용합니다. 여기 깃헙에 공개한 도다리가 바로 일반번역 모델입니다.
-- 도다리 고급번역은 올해의 AI 언어모델로 선정된 <a href='https://huggingface.co/yanolja/EEVE-Korean-Instruct-10.8B-v1.0' target='_blank'>EEVE</a>를 사용합니다.
-- 둘의 기능과 소스코드는 동일합니다. 단지 고급번역은 매우 높은 사양의 컴퓨터가 필요한 AI모델을 사용합니다. 이에 직접 서비스를 결정했습니다.
+<br/>
 
-고급번역으로 `이상한나라의 앨리스` 번역했을때
-<table>
-  <thead>
-    <tr>
-      <th>상태</th>
-      <th>걸린시간</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>vllm 가속 미적용시</td>
-      <td>4시간 7분 26초</td>
-    </tr>
-    <tr>
-      <td>vllm 가속 적용시</td>
-      <td>8분 18초</td>
-    </tr>
-  </tbody>
-</table>
-<br>
+## 개발 뒷이야기
+1. 주식으로 큰돈을 잃으니 개발을 향한 열정이 살아났습니다. 
+2. 도다리2는 그렇게 탄생했습니다.
+3. 저와 gemini와 cluade가 함께 만들었습니다. 솔직히 저의 기여도는 클로드 다음입니다.
+4. pdf는 언제봐도 아주 나쁜 파일 형식입니다.
+5. 개발기간 일주일보다 이 README.md를 만드는데 더 오랜 시간이 걸렸습니다.
+6. AI 도움없이 처음부터 끝까지 제가 만든건 이 파일 하나뿐입니다.
+7. 번역 품질이 제 상상을 초월할 정도로 좋았습니다. 도다리1때는 원문없이 도저히 번역문만 읽을수가 없었는데 지금은 번역문 파일만 다운받아서 읽어도 아무 문제가 없습니다. IT책, 사회과학책 뿐만 아니라 소설책까지 말입니다.
+8. 도다리1때는 네이버 스마트스토어에서 의뢰를 받아 유료 번역을 하곤 했는데 이제 그 시대는 끝난것 같습니다. 도다리2의 31b모델로 직접 번역하시면 구글 제미나이의 번역 품질 거의 그대로를 즐기실수 있습니다. 그래도 네이버스토어는 계속 운영하겠습니다. 제가 주식 인버스를 탔거든요!
 
-## 도다리 고급번역
-- DeepL에 준하는 번역품질 (EEVE-Korean-Instruct-10.8B-v1.0 모델 사용)
-- AI추론 가속 기술(vllm)을 이용한 고속번역
-- <a href='https://moonlit.himion.com/dodari?utm_campaign=goto_moonlit&utm_source=github&utm_medium=link&utm_content=dodari_landing_page' target='_blank'>도다리 고급번역 보러가기</a>
+<br/>
 
-<br>
+---
 
-
-## 업데이트 예정 사항!
-도다리 고급 번역이 어느정도 안정됨에 따라 코드 공개를 결정했습니다.
-1. vram이 23이상일때 야놀자 모델사용 가능
-2. 운영체제가 리눅스일 경우 vllm(AI 가속 모듈) 사용 가능
-3. 번역 프롬프트 커스터마이징
-4. 필터 문구 커스터마이징
-
-조금만 기다려주세요.
+© 2026 Dodari Project. All rights reserved.

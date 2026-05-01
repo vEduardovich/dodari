@@ -40,7 +40,7 @@
 ## 설치 및 실행
 
 초보자라면,
-1. <a href='' title='압축 파일 다운로드' style='text-align:center'>압축 파일 다운로드</a> 클릭
+1. <a href='https://github.com/vEduardovich/dodari/archive/refs/heads/main.zip' title='압축 파일 다운로드' style='text-align:center'>압축 파일 다운로드</a> 클릭
 2. 압축해제 후 
 
 ```bash

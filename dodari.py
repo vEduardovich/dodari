@@ -865,6 +865,46 @@ class Dodari:
                         wide_table_images = {}
                         _tb.print_exc()
 
+                    formula_images = []
+                    try:
+                        pdf_doc_fm = _pdfium.PdfDocument(file['path'])
+                        rendered_pages_fm = {}
+                        for entry in result.document.iterate_items():
+                            item = entry[0] if isinstance(entry, (tuple, list)) else entry
+                            if 'FORMULA' not in str(getattr(item, 'label', '')).upper():
+                                continue
+                            for prov in getattr(item, 'prov', []):
+                                bbox = getattr(prov, 'bbox', None)
+                                if bbox is None:
+                                    continue
+                                page_no = prov.page_no
+                                if page_no not in rendered_pages_fm:
+                                    pdf_page = pdf_doc_fm[page_no - 1]
+                                    pt_w = pdf_page.get_width()
+                                    pt_h = pdf_page.get_height()
+                                    pil_img = pdf_page.render(scale=2.0).to_pil()
+                                    rendered_pages_fm[page_no] = (pil_img, pt_w, pt_h)
+                                pil_img, pt_w, pt_h = rendered_pages_fm[page_no]
+                                img_w, img_h = pil_img.size
+                                sx = img_w / pt_w
+                                sy = img_h / pt_h
+                                pad = 8
+                                x1 = max(0, int(bbox.l * sx) - pad)
+                                y1 = max(0, int((pt_h - bbox.t) * sy) - pad)
+                                x2 = min(img_w, int(bbox.r * sx) + pad)
+                                y2 = min(img_h, int((pt_h - bbox.b) * sy) + pad)
+                                cropped = pil_img.crop((x1, y1, x2, y2))
+                                buf = _io.BytesIO()
+                                cropped.save(buf, format='PNG')
+                                formula_images.append(f'data:image/png;base64,{_b64.b64encode(buf.getvalue()).decode()}')
+                                break
+                        pdf_doc_fm.close()
+                        print(f'[PDF] 수식 이미지 {len(formula_images)}개 크롭 완료')
+                    except Exception as fe:
+                        import traceback as _tb
+                        print(f'[PDF] 수식 이미지 변환 오류: {fe}')
+                        _tb.print_exc()
+
                     html_content = result.document.export_to_html(image_mode=ImageRefMode.EMBEDDED)
                     print('[PDF 번역] HTML 구조화 완료. 텍스트 번역 파이프라인(BeautifulSoup) 시작...')
 
@@ -900,6 +940,18 @@ class Dodari:
                                     'font-size:0.82em;word-break:break-word;'
                                     'table-layout:fixed;'
                                 )
+
+                    if formula_images:
+                        _fm_re = re.compile(r'formula\s+not\s+decoded', re.IGNORECASE)
+                        for soup_obj in [soup_1, soup_2]:
+                            _fm_idx = 0
+                            for _el in list(soup_obj.find_all(['p', 'div', 'span', 'section'])):
+                                if _fm_idx >= len(formula_images):
+                                    break
+                                if _fm_re.search(_el.get_text(separator=' ', strip=True)) and not _el.find(['p', 'div']):
+                                    _el.replace_with(soup_obj.new_tag('img', src=formula_images[_fm_idx],
+                                        style='display:block;max-width:100%;margin:1em auto;'))
+                                    _fm_idx += 1
 
                     block_tag_names = {'p', 'div', 'li', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'figcaption'}
                     target_tags = list(block_tag_names)

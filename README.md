@@ -5,7 +5,7 @@
 도다리2는 구글의 최신 AI를 활용해 <br/>EPUB, PDF, TXT 문서를 장르와 문맥에 맞게 번역하는 다국어 번역기입니다.<br/>
 -------<br/>
 <span style='font-size:0.9em;'>*2024년 3월 도다리1 후속버전입니다</span><br/>
-<span style='font-size:0.9em;'>2026.05.04 이제 윈도우에서도 도다리2 번역이 가능합니다.</span>
+<span style='font-size:0.9em;'>*2026.05.04 이제 윈도우에서도 도다리2 번역이 가능합니다.</span>
 </p>
 
 <img src='https://github.com/user-attachments/assets/2f27d751-b037-4204-8ffc-fd9e16b89015' title='도다리'/>

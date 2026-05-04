@@ -24,16 +24,75 @@
 <br/>
 
 ### 구동 사양
-| AI모델 | Gemma4 e4b 8bit | Gemma4 31b 4bit |
-|:---|:---|:---|
-| 추천 사양 | 최소 (기본품질) | 권장 (고품질) |
-| 모델 설명 | 빠르고 쾌적한 번역 | 깊은 문맥 파악 풍부한 단어선택 |
-| 주관적 느낌 | Deepl보다 좋은것같음 | 제미나이만큼 좋은거 같음 |
-| 칩 | Apple Silicon M1 이상 | M3 Pro / M4 Max 이상 |
-| 통합 메모리 | **8GB~16GB** | **32GB** |
-| 저장 공간 | 10GB 이상 여유 | SSD 35GB 이상 |
-| macOS | Ventura 13.0 이상 | 최신 버전 권장 |
-| Python | 3.11 이상 | — |
+<table>
+  <thead>
+    <tr>
+      <th colspan="2">AI모델</th>
+      <th>Gemma4 e4b 8bit</th>
+      <th>Gemma4 31b 4bit</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td colspan="2">추천 사양</td>
+      <td>최소 (기본품질)</td>
+      <td>권장 (고품질)</td>
+    </tr>
+    <tr>
+      <td colspan="2">모델 설명</td>
+      <td>빠르고 쾌적한 번역</td>
+      <td>깊은 문맥 파악 풍부한 단어선택</td>
+    </tr>
+    <tr>
+      <td colspan="2">주관적 느낌</td>
+      <td>DeepL보다 좋은것같음</td>
+      <td>제미나이만큼 좋은거 같음</td>
+    </tr>
+    <tr>
+      <td colspan="2">저장 공간</td>
+      <td>10GB 이상 여유</td>
+      <td>SSD 35GB 이상</td>
+    </tr>
+    <tr>
+      <td colspan="2">Python</td>
+      <td>3.11 이상</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td rowspan="3">맥북</td>
+      <td>칩</td>
+      <td>Apple Silicon M1 이상</td>
+      <td>M3 Pro / M4 Max 이상</td>
+    </tr>
+    <tr>
+      <td>통합 메모리</td>
+      <td><strong>8GB~16GB</strong></td>
+      <td><strong>32GB</strong></td>
+    </tr>
+    <tr>
+      <td>OS</td>
+      <td>Ventura 13.0 이상</td>
+      <td>최신 버전 권장</td>
+    </tr>
+    <tr>
+      <td rowspan="3">윈도우</td>
+      <td>GPU</td>
+      <td>없어도 됨</td>
+      <td>24GB+</td>
+    </tr>
+    <tr>
+      <td>RAM</td>
+      <td>8GB</td>
+      <td>64GB</td>
+    </tr>
+    <tr>
+      <td>Windows</td>
+      <td>Windows 10(22H2) 이상</td>
+      <td>Windows 11</td>
+    </tr>
+  </tbody>
+</table>
+
 
 <br/>
 
@@ -90,7 +149,8 @@ dodari/
 2. 소설은 텍스트 뿐이라 epub이나 pdf나 번역속도가 비슷합니다.
 3. 그림이나 코드가 많은 책은 pdf 번역속도가 더 빠릅니다. 왜 그런지 저도 잘 모르겠습니다. epub의 경우 표와 상세 플래그까지 모두 번역해서 그런게 아닌가 예상은 합니다. pdf는 이미지로 그냥 잘라낸후 번역없이 첨부하거든요.
 <table style="table-layout:auto"><thead><tr><th rowspan="2">책</th><th rowspan="2">맥북</th><th colspan="2">epub</th><th colspan="2">pdf</th></tr><tr><th>기본e4b</th><th>고급31b</th><th>기본e4b</th><th>고급31b</th></tr></thead><tbody><tr><td rowspan="2">1984<br/>(소설)</td><td>m1pro 16g</td><td>133분</td><td>-</td><td>133분</td><td>-</td></tr><tr><td>m5max 128g</td><td>40분</td><td>135분</td><td>41분</td><td>136분</td></tr><tr><td rowspan="2">Pro Git<br/>(IT서적)</td><td>m1pro 16g</td><td>137분</td><td>-</td><td>65분</td><td>-</td></tr><tr><td>m5max 128g</td><td>45분</td><td>159분</td><td>21분</td><td>81분</td></tr></tbody></table>
-1. 윈도우에서는 아주 느립니다. <br/>- 2020 LG그램으로 1984 소설의 한페이지를 번역하는데 EPUB은 15분, PDF는 18분 걸렸습니다(pdf는 첫로딩시 20분 걸리기도 합니다)<br/>- 그러니까 일반적인 윈도우 랩탑에서 100페이지짜리 epub전자책을 번역한다면 대략 1500분(25시간)이 걸린다는 이야기입니다. 200페이지면 50시간입니다. 하지만 나를 위해 컴퓨터가 쉬지않고 열심히 일하는 모습은 보기 좋았습니다.
+
+4. 윈도우에서는 아주 느립니다. <br/>- 2020 LG그램으로 1984 소설의 한페이지를 번역하는데 EPUB은 15분, PDF는 18분 걸렸습니다(pdf는 첫로딩시 20분 걸리기도 합니다)<br/>- 그러니까 일반적인 윈도우 랩탑에서 100페이지짜리 epub전자책을 번역한다면 대략 1500분(25시간)이 걸린다는 이야기입니다. 200페이지면 50시간입니다. 하지만 나를 위해 컴퓨터가 쉬지않고 열심히 일하는 모습은 보기 좋았습니다.
 
 
 <br/>

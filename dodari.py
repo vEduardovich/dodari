@@ -1,4 +1,8 @@
 import os
+import sys
+
+if os.name == 'nt':
+    os.environ.setdefault('HF_HUB_DISABLE_SYMLINKS_WARNING', '1')
 import base64
 from typing import List, Union, Sequence
 from datetime import timedelta
@@ -39,8 +43,9 @@ from xml.etree.ElementTree import parse
 import atexit
 
 def cleanup_llm_server():
-    print("\n[시스템 종료] MLX API 서버를 안전하게 종료합니다...")
-    os.system("pkill -f 'mlx_vlm.server'")
+    if platform.system() != 'Windows':
+        print("\n[시스템 종료] MLX API 서버를 안전하게 종료합니다...")
+        os.system("pkill -f 'mlx_vlm.server'")
 
 atexit.register(cleanup_llm_server)
 
@@ -104,8 +109,12 @@ class Dodari:
 
         self.app = None
         self.max_len = 512
-        self.translate_batch_size = 20
-        self.translate_workers = 4
+        if platform.system() == 'Windows':
+            self.translate_batch_size = 5
+            self.translate_workers = 1
+        else:
+            self.translate_batch_size = 20
+            self.translate_workers = 4
         self.kv_bits = 8
         self.temperature = 1
         self.launch_time = None
@@ -121,8 +130,12 @@ class Dodari:
 
         self.user_glossary: dict = {}
 
-        self.gemma_api_url = 'http://localhost:8000/v1/chat/completions'
-        self.gemma_model = 'mlx-community/gemma-4-e4b-it-8bit'
+        if platform.system() == 'Windows':
+            self.gemma_api_url = 'http://localhost:11434/v1/chat/completions'
+            self.gemma_model = 'gemma4:e4b'
+        else:
+            self.gemma_api_url = 'http://localhost:8000/v1/chat/completions'
+            self.gemma_model = 'mlx-community/gemma-4-e4b-it-8bit'
 
         self.output_folder = 'outputs'
         self.temp_folder_1 = 'temp_1'
@@ -183,16 +196,27 @@ class Dodari:
                             value='한국어',
                             label='번역 목표 언어'
                         )
-                        gr.HTML("<p style='color:green;'>✔ Apple MLX 고속 번역 엔진 활성화됨</p>")
+                        if platform.system() == 'Windows':
+                            _engine_label = "✔ Ollama 번역 엔진 활성화됨"
+                        else:
+                            _engine_label = "✔ Apple MLX 고속 번역 엔진 활성화됨"
+                        gr.HTML(f"<p style='color:green;'>{_engine_label}</p>")
 
-                        _model_choices = [
-                            "mlx-community/gemma-4-e4b-it-8bit",
-                            "mlx-community/gemma-4-31b-it-4bit",
-                        ]
+                        if platform.system() == 'Windows':
+                            _model_choices = ["gemma4:e4b", "gemma4:31b"]
+                            _model_default = "gemma4:e4b"
+                            _model_label = "모델 선택 (E4B: 기본 · 31B: 고품질, 선택 시 자동 전환)"
+                        else:
+                            _model_choices = [
+                                "mlx-community/gemma-4-e4b-it-8bit",
+                                "mlx-community/gemma-4-31b-it-4bit",
+                            ]
+                            _model_default = _model_choices[0]
+                            _model_label = "모델 선택 (E4B: 16GB 이하 권장 · 31B: 32GB 이상 고품질, 교체 시 서버 재시작 소요)"
                         self.model_radio = gr.Radio(
                             choices=_model_choices,
-                            label="모델 선택 (E4B: 16GB 이하 권장 · 31B: 32GB 이상 고품질, 교체 시 서버 재시작 소요)",
-                            value=_model_choices[0]
+                            label=_model_label,
+                            value=_model_default
                         )
                 with gr.Column(scale=1, min_width=300):
                     with gr.Tab('순서 3'):
@@ -434,6 +458,11 @@ class Dodari:
         gr.Info(f"모델을 {new_model}로 교체 중입니다. 잠시 기다려주세요.")
         self.gemma_model = new_model
 
+        if platform.system() == 'Windows':
+            print(f"[모델 교체] Windows(Ollama): 서버 재시작 불필요, 모델 전환 → {new_model}")
+            gr.Info(f"Ollama 모델이 {new_model}로 전환되었습니다. (서버 재시작 불필요)")
+            return
+
         cleanup_llm_server()
         time.sleep(2)
 
@@ -479,22 +508,26 @@ class Dodari:
 
         progress(0, desc="번역 서버 상태 확인 중...")
         server_ok = False
+        _base_url = self.gemma_api_url.rsplit('/v1/', 1)[0]
         for attempt in range(5):
             try:
-                resp = requests.get('http://localhost:8000/v1/models', timeout=3)
+                resp = requests.get(f'{_base_url}/v1/models', timeout=3)
                 if resp.status_code == 200:
                     server_ok = True
                     break
             except Exception:
                 pass
-            print(f'[서버 대기] localhost:8000 응답 없음 ({attempt + 1}/5), 2초 후 재시도...')
+            print(f'[서버 대기] 응답 없음 ({attempt + 1}/5), 2초 후 재시도...')
             time.sleep(2)
 
         if not server_ok:
+            _platform_guide = {
+                'Windows': "Windows: Ollama가 실행 중인지 확인하세요. (ollama serve)",
+                'Darwin': "start_mac.sh 실행 여부를 확인하세요.",
+            }.get(platform.system(), "번역 서버 실행 여부를 확인하세요.")
             return (
                 None,
-                "<p style='color:red;'>[오류] 번역 서버(localhost:8000)에 연결할 수 없습니다.<br>"
-                "<code>start_mac.sh</code> 실행 여부를 확인하세요.</p>"
+                f"<p style='color:red;'>[오류] 번역 서버에 연결할 수 없습니다.<br>{_platform_guide}</p>"
             )
         print('Gemma API 번역 준비 완료')
 
@@ -691,7 +724,7 @@ class Dodari:
                         pipeline_options.generate_picture_images = True
                         pipeline_options.images_scale = 2.0
                         pipeline_options.accelerator_options = AcceleratorOptions(
-                            num_threads=8,
+                            num_threads=4 if platform.system() == 'Windows' else 8,
                             device=AcceleratorDevice.CPU
                         )
                         
@@ -1222,6 +1255,8 @@ class Dodari:
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": self.max_len,
             "temperature": self.temperature,
+            "top_k": 64,
+            "top_p": 0.95,
         }
         try:
             response = requests.post(
@@ -1286,6 +1321,8 @@ class Dodari:
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": batch_max_tokens,
             "temperature": self.temperature,
+            "top_k": 64,
+            "top_p": 0.95,
         }
 
         max_retries = 3
@@ -1336,11 +1373,7 @@ class Dodari:
         particle_list_1 = []
         particle_list_2 = []
 
-        processed_texts = []
-        for text in only_texts:
-            text = re.sub(r'^[^\w\s]', '', text)
-            text = re.sub(r':', '-', text)
-            processed_texts.append(text)
+        processed_texts = list(only_texts)
 
         from concurrent.futures import ThreadPoolExecutor
 
@@ -1372,7 +1405,8 @@ class Dodari:
         translated_list = [item for sublist in chunk_results for item in sublist]
 
         total_elapsed = time.time() - t_start
-        print(f'▶ 전체 번역 완료: {total}문장 / 총 {total_elapsed:.1f}s ({total/total_elapsed:.1f}문장/s)')
+        speed = f'{total/total_elapsed:.1f}문장/s' if total_elapsed > 0 else '-'
+        print(f'▶ 전체 번역 완료: {total}문장 / 총 {total_elapsed:.1f}s ({speed})')
 
         text_idx = 0
 
@@ -1568,7 +1602,10 @@ class Dodari:
 
     def remove_folder(self, temp_folder: PathType):
         if os.path.exists(temp_folder):
-            shutil.rmtree(temp_folder)
+            if os.name == 'nt':
+                import gc
+                gc.collect()
+            shutil.rmtree(temp_folder, ignore_errors=True)
 
     def extract_epub_contents(self, folder_path: PathType, epub_file: PathType):
         try:

@@ -22,7 +22,7 @@ if [ -z "$PYTHON_CMD" ]; then
     echo ""
     echo "❌ Python 3.11 이상이 필요합니다. (현재: $CURRENT_VER)"
     echo ""
-    echo "아래 명령어로 Python을 설치한 후 다시 start_mac.sh를 실행해주세요."
+    echo "아래 명령어로 Python을 설치한 후 다시 실행하세요:"
     echo ""
     echo "  1) Homebrew 설치 (없을 경우):"
     echo "     /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
@@ -45,6 +45,7 @@ then
 
     pip install --upgrade pip
     pip install -r requirements.txt
+    pip install mlx-vlm mlx 2>/dev/null || true
 
     if [ $? -ne 0 ]; then
         echo ""
@@ -80,7 +81,6 @@ sleep 5
 
 echo "AI 번역기 도다리를 시작합니다."
 echo "잠시만 기다려주세요.."
-echo "다만 처음 실행시에는 AI모델을 설치해야해서 시간이 아주 오래걸립니다."
 
 dodari_env/bin/python3 dodari.py
 deactivate

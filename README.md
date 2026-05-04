@@ -5,7 +5,7 @@
 도다리2는 구글의 최신 AI를 활용해 <br/>EPUB, PDF, TXT 문서를 장르와 문맥에 맞게 번역하는 다국어 번역기입니다.<br/>
 -------<br/>
 <span style='font-size:0.9em;'>*2024년 3월 도다리1 후속버전입니다</span><br/>
-<span style='font-size:0.9em;'><b>*Apple Silicon Mac 전용</b>으로 최적화되었습니다.</span>
+<span style='font-size:0.9em;'>2026.05.04 이제 윈도우에서도 도다리2 번역이 가능합니다.</span>
 </p>
 
 <img src='https://github.com/user-attachments/assets/2f27d751-b037-4204-8ffc-fd9e16b89015' title='도다리'/>
@@ -42,10 +42,8 @@
 초보자라면,
 1. <a href='https://github.com/vEduardovich/dodari/archive/refs/heads/main.zip' title='압축 파일 다운로드' style='text-align:center'>압축 파일 다운로드</a> 클릭
 2. 압축해제 후 
-
-```bash
-sh start_mac.sh
-```
+- 윈도우 사용자는 `start_windows.bat` 더블 클릭
+- 맥이나 우분투 사용자는 터미널 창에서 `sh start_mac.sh` 실행
 3.  `http://127.0.0.1:7860` 에 접속하면 도다리2가 보입니다.
 
 _첫 실행시 관련 프로그램 설치와 AI 모델을 다운로드 하는데 아주 오랜 시간이 걸립니다!_
@@ -57,8 +55,10 @@ _에러 발생시 dodari_env폴더 삭제후 다시 실행해보세요._
 ```bash
 git clone https://github.com/vEduardovich/dodari.git
 cd dodari
-sh start_mac.sh
 ```
+- 윈도우는 `start_windows.bat` 실행
+- 맥, 우분투는 `sh start_mac.sh` 실행
+
 
 <br/>
 
@@ -68,7 +68,8 @@ sh start_mac.sh
 dodari/
 ├── dodari_env         # 도다리 실행을 위한 관련 파일들이 설치되는 폴더
 ├── dodari.py          # 메인 애플리케이션
-├── start_mac.sh       # 실행 스크립트
+├── start_mac.sh       # 맥 실행 스크립트
+├── start_windows.sh   # 윈도우 실행 스크립트
 └── requirements.txt   # 의존성 목록
 ```
 
@@ -89,6 +90,8 @@ dodari/
 2. 소설은 텍스트 뿐이라 epub이나 pdf나 번역속도가 비슷합니다.
 3. 그림이나 코드가 많은 책은 pdf 번역속도가 더 빠릅니다. 왜 그런지 저도 잘 모르겠습니다. epub의 경우 표와 상세 플래그까지 모두 번역해서 그런게 아닌가 예상은 합니다. pdf는 이미지로 그냥 잘라낸후 번역없이 첨부하거든요.
 <table style="table-layout:auto"><thead><tr><th rowspan="2">책</th><th rowspan="2">맥북</th><th colspan="2">epub</th><th colspan="2">pdf</th></tr><tr><th>기본e4b</th><th>고급31b</th><th>기본e4b</th><th>고급31b</th></tr></thead><tbody><tr><td rowspan="2">1984<br/>(소설)</td><td>m1pro 16g</td><td>133분</td><td>-</td><td>133분</td><td>-</td></tr><tr><td>m5max 128g</td><td>40분</td><td>135분</td><td>41분</td><td>136분</td></tr><tr><td rowspan="2">Pro Git<br/>(IT서적)</td><td>m1pro 16g</td><td>137분</td><td>-</td><td>65분</td><td>-</td></tr><tr><td>m5max 128g</td><td>45분</td><td>159분</td><td>21분</td><td>81분</td></tr></tbody></table>
+1. 윈도우에서는 아주 느립니다. <br/>- 2020 LG그램으로 1984 소설의 한페이지를 번역하는데 EPUB은 15분, PDF는 18분 걸렸습니다(pdf는 첫로딩시 20분 걸리기도 합니다)<br/>- 그러니까 일반적인 윈도우 랩탑에서 100페이지짜리 epub전자책을 번역한다면 대략 1500분(25시간)이 걸린다는 이야기입니다. 200페이지면 50시간입니다. 하지만 나를 위해 컴퓨터가 쉬지않고 열심히 일하는 모습은 보기 좋았습니다.
+
 
 <br/>
 
@@ -116,8 +119,22 @@ dodari/
 다운로드한 `dodari` 폴더 전체를 지웁니다.
 
 ### 2. AI모델 삭제
-`~/.cache/huggingface/hub` 아래의 폴더들을 삭제합니다.
+#### Mac
+`~/.cache/huggingface/hub` 아래의 폴더들을 삭제
+<br/>
+#### Windows
+1. ollama 모델삭제
+```bash
+ollama rm gemma4:e4b
+ollama rm gemma4:31b
+```
+1. ollama 프로그램 삭제
+제어판 → 프로그램 추가/제거 → Ollama 제거
 
+<br/>
+
+## 업데이트 기록
+2026.05.04 윈도우 플랫폼 추가, 특수문자관련 번역 오류 수정
 <br/>
 
 ## 개발 뒷이야기

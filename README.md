@@ -188,7 +188,7 @@ dodari/
 ollama rm gemma4:e4b
 ollama rm gemma4:31b
 ```
-1. ollama 프로그램 삭제
+2. ollama 프로그램 삭제
 제어판 → 프로그램 추가/제거 → Ollama 제거
 
 <br/>

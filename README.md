@@ -147,9 +147,9 @@ For advanced users:
 3. Books with many images or code blocks translate faster as PDF — PDFs skip translating images entirely and embed them as-is, while EPUB translates tables and detailed flags too.
 <table style="table-layout:auto"><thead><tr><th rowspan="2">Book</th><th rowspan="2">MacBook</th><th colspan="2">epub</th><th colspan="2">pdf</th></tr><tr><th>e4b (standard)</th><th>31b (high quality)</th><th>e4b (standard)</th><th>31b (high quality)</th></tr></thead><tbody><tr><td rowspan="2">1984<br/>(novel)</td><td>M1 Pro 16 GB</td><td>133 min</td><td>—</td><td>133 min</td><td>—</td></tr><tr><td>M5 Max 128 GB</td><td>40 min</td><td>135 min</td><td>41 min</td><td>136 min</td></tr><tr><td rowspan="2">Pro Git<br/>(IT book)</td><td>M1 Pro 16 GB</td><td>137 min</td><td>—</td><td>65 min</td><td>—</td></tr><tr><td>M5 Max 128 GB</td><td>45 min</td><td>159 min</td><td>21 min</td><td>81 min</td></tr></tbody></table>
 
-4. Windows is considerably slower.<br/>
-_On a 2020 LG Gram laptop, translating one page of the novel *1984* took 15 minutes for EPUB and 18 minutes for PDF (the first PDF load can take up to 20 minutes)_<br/>
-_So on a typical Windows laptop, a 100-page EPUB would take roughly 1,500 minutes (25 hours). 200 pages = 50 hours. That said, watching your computer work tirelessly for you is strangely satisfying_
+4. Windows is considerably slower.
+* _On a 2020 LG Gram laptop, translating one page of the novel *1984* took 15 minutes for EPUB and 18 minutes for PDF (the first PDF load can take up to 20 minutes)_
+* _So on a typical Windows laptop, a 100-page EPUB would take roughly 1,500 minutes (25 hours). 200 pages = 50 hours. That said, watching your computer work tirelessly for you is strangely satisfying_
 
 
 <br/>
@@ -333,9 +333,9 @@ dodari/
 3. 그림이나 코드가 많은 책은 pdf 번역속도가 더 빠릅니다. 왜 그런지 저도 잘 모르겠습니다. epub의 경우 표와 상세 플래그까지 모두 번역해서 그런게 아닌가 예상은 합니다. pdf는 이미지로 그냥 잘라낸후 번역없이 첨부하거든요.
 <table style="table-layout:auto"><thead><tr><th rowspan="2">책</th><th rowspan="2">맥북</th><th colspan="2">epub</th><th colspan="2">pdf</th></tr><tr><th>기본e4b</th><th>고급31b</th><th>기본e4b</th><th>고급31b</th></tr></thead><tbody><tr><td rowspan="2">1984<br/>(소설)</td><td>m1pro 16g</td><td>133분</td><td>-</td><td>133분</td><td>-</td></tr><tr><td>m5max 128g</td><td>40분</td><td>135분</td><td>41분</td><td>136분</td></tr><tr><td rowspan="2">Pro Git<br/>(IT서적)</td><td>m1pro 16g</td><td>137분</td><td>-</td><td>65분</td><td>-</td></tr><tr><td>m5max 128g</td><td>45분</td><td>159분</td><td>21분</td><td>81분</td></tr></tbody></table>
 
-1. 윈도우에서는 아주 느립니다.<br/>
-_2020 LG그램으로 1984 소설의 한페이지를 번역하는데 EPUB은 15분, PDF는 18분 걸렸습니다(pdf는 첫로딩시 20분 걸리기도 합니다)_<br/>
-_그러니까 일반적인 윈도우 랩탑에서 100페이지짜리 epub전자책을 번역한다면 대략 1500분(25시간)이 걸린다는 이야기입니다. 200페이지면 50시간입니다. 하지만 나를 위해 컴퓨터가 쉬지않고 열심히 일하는 모습은 보기 좋았습니다_
+1. 윈도우에서는 아주 느립니다.
+* _2020 LG그램으로 1984 소설의 한페이지를 번역하는데 EPUB은 15분, PDF는 18분 걸렸습니다(pdf는 첫로딩시 20분 걸리기도 합니다)_
+* _그러니까 일반적인 윈도우 랩탑에서 100페이지짜리 epub전자책을 번역한다면 대략 1500분(25시간)이 걸린다는 이야기입니다. 200페이지면 50시간입니다. 하지만 나를 위해 컴퓨터가 쉬지않고 열심히 일하는 모습은 보기 좋았습니다_
 
 
 <br/>

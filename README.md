@@ -161,6 +161,7 @@ Delete the entire `dodari` folder you downloaded.
 #### Mac
 Delete the folders under `~/.cache/huggingface/hub`.
 <br/>
+
 #### Windows
 1. Remove Ollama models:
 ```bash
@@ -173,9 +174,8 @@ Control Panel → Programs → Uninstall Ollama
 <br/>
 
 ## Changelog
-2026.05.04 — Added Windows support; fixed translation errors related to special characters.
-2026.05.04 Dodari 2 is now available on Windows
-2026.05.06 Implemented Multilingual Support 
+* 2026.05.04 — Added Windows support; fixed translation errors related to special characters.
+* 2026.05.06 Implemented Multilingual Support 
 <br/>
 
 ---

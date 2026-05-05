@@ -1,13 +1,14 @@
 @echo off
+chcp 65001 >nul
 
-rem === 1´Ü°è: Python 3.11+ È®ÀÎ ===
-echo [1/6] Python ¹öÀü È®ÀÎ Áß...
+rem === Step 1: Check Python 3.11+ ===
+echo [1/6] Checking Python installation...
 python --version >nul 2>&1
 if errorlevel 1 (
     echo.
-    echo [¿À·ù] PythonÀÌ ¼³Ä¡µÇ¾î ÀÖÁö ¾Ê½À´Ï´Ù.
-    echo Python 3.11 ÀÌ»óÀ» ¼³Ä¡ÇÑ ÈÄ ´Ù½Ã ½ÇÇàÇØÁÖ¼¼¿ä.
-    echo ´Ù¿î·Îµå: https://www.python.org/downloads/
+    echo [Error] Python is not installed.
+    echo Please install Python 3.11 or higher and run this script again.
+    echo Download: https://www.python.org/downloads/
     start https://www.python.org/downloads/
     pause
     exit /b 1
@@ -18,41 +19,41 @@ for /f "tokens=1,2 delims=." %%a in ("%PY_VER%") do (
     set PY_MINOR=%%b
 )
 if %PY_MAJOR% LSS 3 (
-    echo [¿À·ù] Python 3.11 ÀÌ»óÀÌ ÇÊ¿äÇÕ´Ï´Ù. ÇöÀç ¹öÀü: %PY_VER%
+    echo [Error] Python 3.11 or higher is required. Current: %PY_VER%
     pause
     exit /b 1
 )
 if %PY_MAJOR% EQU 3 if %PY_MINOR% LSS 11 (
-    echo [¿À·ù] Python 3.11 ÀÌ»óÀÌ ÇÊ¿äÇÕ´Ï´Ù. ÇöÀç ¹öÀü: %PY_VER%
+    echo [Error] Python 3.11 or higher is required. Current: %PY_VER%
     pause
     exit /b 1
 )
-echo   ¿Ï·á - Python %PY_VER%
+echo   Done - Python %PY_VER%
 
-rem === 2´Ü°è: Ollama ¼³Ä¡ È®ÀÎ ===
+rem === Step 2: Check Ollama installation ===
 echo.
-echo [2/6] Ollama ¼³Ä¡ È®ÀÎ Áß...
+echo [2/6] Checking Ollama installation...
 where ollama >nul 2>&1
 if not errorlevel 1 goto OLLAMA_OK
 
-echo   Ollama°¡ ¼³Ä¡µÇ¾î ÀÖÁö ¾Ê½À´Ï´Ù. ÀÚµ¿ ¼³Ä¡¸¦ ½ÃÀÛÇÕ´Ï´Ù.
-echo   ¼³Ä¡ ÆÄÀÏ Å©±â´Â ¾à 1.8GBÀÔ´Ï´Ù. ÀÎÅÍ³Ý ¼Óµµ¿¡ µû¶ó ¼öºÐ ÀÌ»ó ¼Ò¿äµÉ ¼ö ÀÖ½À´Ï´Ù.
-echo   ¾Æ·¡¿¡ ÁøÇà »óÈ²ÀÌ Ç¥½ÃµË´Ï´Ù. Ã¢ÀÌ ¸ØÃá °ÍÃ³·³ º¸¿©µµ Á¤»óÀÌ´Ï ±â´Ù·ÁÁÖ¼¼¿ä.
+echo   Ollama is not installed. Starting automatic installation.
+echo   Download size is approximately 1.8GB. This may take a while depending on your connection.
+echo   Progress will be shown below. Please wait until the window closes on its own.
 echo.
 winget install Ollama.Ollama --accept-source-agreements --accept-package-agreements
 if not errorlevel 1 goto OLLAMA_PATH_CHECK
 
 echo.
-echo   winget ½ÇÆÐ. curl·Î Á÷Á¢ ´Ù¿î·ÎµåÇÕ´Ï´Ù... (¾à 1.8GB)
+echo   winget failed. Downloading via curl... (approx. 1.8GB)
 curl -L --progress-bar -o "%TEMP%\OllamaSetup.exe" "https://ollama.com/download/OllamaSetup.exe"
 if errorlevel 1 (
     echo.
-    echo [¿À·ù] ´Ù¿î·Îµå¿¡ ½ÇÆÐÇß½À´Ï´Ù.
-    echo ¼öµ¿ ¼³Ä¡ ÈÄ ´Ù½Ã ½ÇÇàÇØÁÖ¼¼¿ä: https://ollama.com/download
+    echo [Error] Download failed.
+    echo Please install manually and run this script again: https://ollama.com/download
     pause
     exit /b 1
 )
-echo   ¼³Ä¡ ÇÁ·Î±×·¥À» ½ÇÇàÇÕ´Ï´Ù...
+echo   Running installer...
 "%TEMP%\OllamaSetup.exe" /silent
 timeout /t 15 /nobreak >nul
 
@@ -60,52 +61,52 @@ timeout /t 15 /nobreak >nul
 where ollama >nul 2>&1
 if errorlevel 1 (
     echo.
-    echo [¾È³»] Ollama ¼³Ä¡ ¿Ï·á. PATH Àû¿ëÀ» À§ÇØ Àç½ÃÀÛÀÌ ÇÊ¿äÇÕ´Ï´Ù.
-    echo ÀÌ Ã¢À» ´Ý°í »õ ¸í·É ÇÁ·ÒÇÁÆ®¿¡¼­ start_windows.batÀ» ´Ù½Ã ½ÇÇàÇØÁÖ¼¼¿ä.
+    echo [Notice] Ollama installation complete. PATH refresh requires a new terminal session.
+    echo Please close this window and run start_windows.bat again from a new terminal.
     pause
     exit /b 1
 )
 
 :OLLAMA_OK
-echo   ¿Ï·á - Ollama È®ÀÎµÊ
+echo   Done - Ollama confirmed
 
-rem === 3´Ü°è: gemma4:e4b ±âº» ¸ðµ¨ È®ÀÎ ===
+rem === Step 3: Check base AI model (gemma4:e4b) ===
 echo.
-echo [3/6] ±âº» AI ¸ðµ¨(gemma4:e4b) È®ÀÎ Áß...
+echo [3/6] Checking base AI model (gemma4:e4b)...
 ollama list 2>nul | findstr /i "gemma4:e4b" >nul
 if not errorlevel 1 goto MODEL_OK
 
-echo   ±âº» AI ¸ðµ¨(gemma4:e4b)À» ´Ù¿î·ÎµåÇÕ´Ï´Ù. (¾à 3GB, ½Ã°£ÀÌ °É¸³´Ï´Ù)
-echo   °íÇ°Áú ¸ðµ¨(gemma4:31b)Àº UI¿¡¼­ ¼±ÅÃ ½Ã Ollama°¡ ÀÚµ¿À¸·Î Ã³¸®ÇÕ´Ï´Ù.
-echo   ´Ù¿î·Îµå ÁøÇà·üÀÌ Ç¥½ÃµË´Ï´Ù. ¿Ï·á±îÁö ±â´Ù·ÁÁÖ¼¼¿ä.
+echo   Downloading base AI model (gemma4:e4b). (approx. 3GB, this will take a while)
+echo   The high-quality model (gemma4:31b) can be selected in the UI â€” Ollama handles it automatically.
+echo   Download progress is shown below. Please wait until complete.
 echo.
 ollama pull gemma4:e4b
 if errorlevel 1 (
     echo.
-    echo [¿À·ù] gemma4:e4b ¸ðµ¨ ´Ù¿î·Îµå¿¡ ½ÇÆÐÇß½À´Ï´Ù.
-    echo ÀÎÅÍ³Ý ¿¬°áÀ» È®ÀÎÇÏ°í ´Ù½Ã ½ÃµµÇØÁÖ¼¼¿ä.
+    echo [Error] gemma4:e4b model download failed.
+    echo Please check your internet connection and try again.
     pause
     exit /b 1
 )
 
 :MODEL_OK
-echo   ¿Ï·á - gemma4:e4b ÁØºñµÊ
+echo   Done - gemma4:e4b ready
 
-rem === 4´Ü°è: Python °¡»óÈ¯°æ È®ÀÎ ===
+rem === Step 4: Check Python virtual environment ===
 echo.
-echo [4/6] Python °¡»óÈ¯°æ È®ÀÎ Áß...
+echo [4/6] Checking Python virtual environment...
 if exist "%~dp0\dodari_env\Scripts\activate.bat" goto VENV_OK
 
-echo   °¡»óÈ¯°æÀÌ ¾ø½À´Ï´Ù. »õ·Î »ý¼ºÇÕ´Ï´Ù...
+echo   Creating virtual environment...
 python -m venv dodari_env
 if errorlevel 1 (
     echo.
-    echo [¿À·ù] °¡»óÈ¯°æ »ý¼º¿¡ ½ÇÆÐÇß½À´Ï´Ù.
+    echo [Error] Virtual environment creation failed.
     pause
     exit /b 1
 )
 
-echo   ÇÊ¿äÇÑ ÆÐÅ°Áö¸¦ ¼³Ä¡ÇÕ´Ï´Ù. Ã¹ ½ÇÇà ½Ã ¼öºÐÀÌ ¼Ò¿äµË´Ï´Ù...
+echo   Installing required packages. This may take a few minutes on first run...
 cd /d "%~dp0\dodari_env\Scripts"
 call activate.bat
 cd /d "%~dp0"
@@ -113,8 +114,8 @@ python -m pip install --upgrade pip >nul
 pip install -r requirements.txt
 if errorlevel 1 (
     echo.
-    echo [¿À·ù] ÆÐÅ°Áö ¼³Ä¡¿¡ ½ÇÆÐÇß½À´Ï´Ù.
-    echo dodari_env Æú´õ¸¦ »èÁ¦ÇÑ ÈÄ start_windows.batÀ» ´Ù½Ã ½ÇÇàÇØÁÖ¼¼¿ä.
+    echo [Error] Package installation failed.
+    echo Delete the dodari_env folder and run start_windows.bat again.
     call dodari_env\Scripts\deactivate.bat 2>nul
     pause
     exit /b 1
@@ -122,32 +123,32 @@ if errorlevel 1 (
 call dodari_env\Scripts\deactivate.bat 2>nul
 
 :VENV_OK
-echo   ¿Ï·á - °¡»óÈ¯°æ ÁØºñµÊ
+echo   Done - virtual environment ready
 
-rem === 5´Ü°è: Ollama ¼­¹ö ½ÇÇà ===
+rem === Step 5: Start Ollama server ===
 echo.
-echo [5/6] Ollama ¼­¹ö ½ÃÀÛ Áß...
+echo [5/6] Starting Ollama server...
 tasklist /fi "imagename eq ollama.exe" 2>nul | findstr /i "ollama.exe" >nul
 if not errorlevel 1 (
-    echo   ¿Ï·á - Ollama ¼­¹ö°¡ ÀÌ¹Ì ½ÇÇà ÁßÀÔ´Ï´Ù.
+    echo   Done - Ollama server is already running.
     goto OLLAMA_SERVER_OK
 )
 start /B ollama serve
-echo   ¼­¹ö ÃÊ±âÈ­ ´ë±â Áß (5ÃÊ)...
+echo   Waiting for server initialization... (5 seconds)
 timeout /t 5 /nobreak >nul
 
 :OLLAMA_SERVER_OK
-echo   ¿Ï·á - Ollama ¼­¹ö ÁØºñµÊ
+echo   Done - Ollama server ready
 
-rem === 6´Ü°è: µµ´Ù¸® ¾Û ½ÇÇà ===
+rem === Step 6: Start Dodari ===
 echo.
-echo [6/6] pdf ÀÎ½ÄÅøÀ» ¼³Ä¡ÁßÀÔ´Ï´Ù. Á¶±Ý¸¸ ´õ ±â´Ù·Á ÁÖ¼¼¿ä.
+echo [6/6] Installing PDF recognition tool. Please wait a moment...
 echo.
 set PYTHON="%~dp0\dodari_env\Scripts\Python.exe"
 %PYTHON% dodari.py
 
 if errorlevel 1 (
     echo.
-    echo [¿À·ù] µµ´Ù¸® ½ÇÇà Áß ¿À·ù°¡ ¹ß»ýÇß½À´Ï´Ù.
+    echo [Error] An error occurred while running Dodari.
     pause
 )

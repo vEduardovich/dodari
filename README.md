@@ -1,4 +1,185 @@
 <p align="center">
+<img src='https://github.com/user-attachments/assets/6b6a73f6-087c-439c-869f-5e0d0629db92' width='200px' height='200px' title='Dodari'/>
+<h1 align="center">Dodari 2</h1>
+<p align='center'>
+Dodari 2 is a multilingual AI translator that uses Google's latest AI to translate <br/>EPUB, PDF, and TXT documents with genre-aware, context-sensitive accuracy.<br/>
+-------<br/>
+<span style='font-size:0.9em;'>*Successor to Dodari 1 (released March 2024)</span>
+</p>
+
+<img src='https://github.com/user-attachments/assets/835a52f7-c3c4-4ab8-972c-37e299afe316' title='Dodari'/>
+
+### Key Features
+1. Translates `EPUB (e-books)`, `PDF`, and `TXT` files.
+2. _Note:_ To preserve layout, `PDF` translation output is saved as `EPUB` rather than `PDF`. Complex formulas and tables are embedded as images.
+3. Outputs two files: `Translation (Original)` and `Translation only` — allowing sentence-by-sentence comparison with the source.
+4. Automatic language detection.
+5. Cross-translation between `Korean` · `English` · `Japanese` · `Chinese` · `French` · `Italian` · `Dutch` · `Danish` · `Swedish` · `Norwegian` · `Arabic` · `Persian`.
+6. Automatic book genre detection.
+7. Selectable translation tone/style.
+8. Glossary — extract key terms (names, etc.) with AI and apply them consistently throughout.
+9. No file size limit.
+
+<br/>
+
+### System Requirements
+<table>
+  <thead>
+    <tr>
+      <th colspan="2">AI Model</th>
+      <th>Gemma4 e4b 8bit</th>
+      <th>Gemma4 31b 4bit</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td colspan="2">Recommendation</td>
+      <td>Minimum (standard quality)</td>
+      <td>Recommended (high quality)</td>
+    </tr>
+    <tr>
+      <td colspan="2">Model description</td>
+      <td>Fast and comfortable translation</td>
+      <td>Deep context, rich vocabulary</td>
+    </tr>
+    <tr>
+      <td colspan="2">Subjective quality</td>
+      <td>Feels better than DeepL</td>
+      <td>Close to Gemini quality</td>
+    </tr>
+    <tr>
+      <td colspan="2">Storage</td>
+      <td>10 GB free space</td>
+      <td>35 GB SSD or more</td>
+    </tr>
+    <tr>
+      <td colspan="2">Python</td>
+      <td>3.11 or higher</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td rowspan="3">Mac</td>
+      <td>Chip</td>
+      <td>Apple Silicon M1 or later</td>
+      <td>M3 Pro / M4 Max or later</td>
+    </tr>
+    <tr>
+      <td>Unified Memory</td>
+      <td><strong>8 GB – 16 GB</strong></td>
+      <td><strong>32 GB</strong></td>
+    </tr>
+    <tr>
+      <td>OS</td>
+      <td>macOS Ventura 13.0 or later</td>
+      <td>Latest version recommended</td>
+    </tr>
+    <tr>
+      <td rowspan="3">Windows</td>
+      <td>GPU</td>
+      <td>Not required</td>
+      <td>24 GB VRAM or more</td>
+    </tr>
+    <tr>
+      <td>RAM</td>
+      <td>8 GB</td>
+      <td>64 GB</td>
+    </tr>
+    <tr>
+      <td>Windows</td>
+      <td>Windows 10 (22H2) or later</td>
+      <td>Windows 11</td>
+    </tr>
+  </tbody>
+</table>
+
+<br/>
+
+## Installation & Setup
+
+For beginners:
+1. Click <a href='https://github.com/vEduardovich/dodari/archive/refs/heads/main.zip' title='Download zip' style='text-align:center'>Download ZIP</a>
+2. Extract the archive, then:
+- **Windows**: double-click `start_windows.bat`
+- **Mac**: run `sh start_mac.sh` in a terminal window
+3. Open `http://127.0.0.1:7860` in your browser — Dodari 2 will be ready.
+
+_On first run, setup and AI model download will take a long time. Please be patient!_
+_If you encounter an error, delete the `dodari_env` folder and run the script again._
+
+<br>
+For advanced users:
+
+```bash
+git clone https://github.com/vEduardovich/dodari.git
+cd dodari
+```
+- Windows: run `start_windows.bat`
+- Mac: run `sh start_mac.sh`
+
+
+<br/>
+
+## Project Structure
+
+```
+dodari/
+├── dodari_env         # Folder where runtime dependencies are installed
+├── dodari.py          # Main application
+├── start_mac.sh       # Mac launch script
+├── start_windows.bat  # Windows launch script
+└── requirements.txt   # Dependency list
+```
+
+<br>
+
+## Updating to the Latest Version
+For beginners:
+1. Download the ZIP again and extract it.
+2. Overwrite the existing Dodari folder with the new files.
+
+For advanced users:
+1. `git pull`
+<br>
+
+## Translation Speed Reference
+1. The M5 Max is a very high-end machine — the M1 Pro numbers are more representative for most users.
+2. Novels are text-only, so EPUB and PDF translation speeds are similar.
+3. Books with many images or code blocks translate faster as PDF — PDFs skip translating images entirely and embed them as-is, while EPUB translates tables and detailed flags too.
+<table style="table-layout:auto"><thead><tr><th rowspan="2">Book</th><th rowspan="2">MacBook</th><th colspan="2">epub</th><th colspan="2">pdf</th></tr><tr><th>e4b (standard)</th><th>31b (high quality)</th><th>e4b (standard)</th><th>31b (high quality)</th></tr></thead><tbody><tr><td rowspan="2">1984<br/>(novel)</td><td>M1 Pro 16 GB</td><td>133 min</td><td>—</td><td>133 min</td><td>—</td></tr><tr><td>M5 Max 128 GB</td><td>40 min</td><td>135 min</td><td>41 min</td><td>136 min</td></tr><tr><td rowspan="2">Pro Git<br/>(IT book)</td><td>M1 Pro 16 GB</td><td>137 min</td><td>—</td><td>65 min</td><td>—</td></tr><tr><td>M5 Max 128 GB</td><td>45 min</td><td>159 min</td><td>21 min</td><td>81 min</td></tr></tbody></table>
+
+4. Windows is considerably slower. <br/>— On a 2020 LG Gram laptop, translating one page of the novel *1984* took 15 minutes for EPUB and 18 minutes for PDF (the first PDF load can take up to 20 minutes).<br/>— So on a typical Windows laptop, a 100-page EPUB would take roughly 1,500 minutes (25 hours). 200 pages = 50 hours. That said, watching your computer work tirelessly for you is strangely satisfying.
+
+
+<br/>
+
+
+## Uninstalling
+### 1. Remove the program
+Delete the entire `dodari` folder you downloaded.
+
+### 2. Remove the AI model
+#### Mac
+Delete the folders under `~/.cache/huggingface/hub`.
+<br/>
+#### Windows
+1. Remove Ollama models:
+```bash
+ollama rm gemma4:e4b
+ollama rm gemma4:31b
+```
+2. Uninstall Ollama:
+Control Panel → Programs → Uninstall Ollama
+
+<br/>
+
+## Changelog
+2026.05.04 — Added Windows support; fixed translation errors related to special characters.
+2026.05.04 Dodari 2 is now available on Windows
+2026.05.06 Implemented Multilingual Support 
+<br/>
+
+---
+<p align="center">
 <img src='https://github.com/user-attachments/assets/6b6a73f6-087c-439c-869f-5e0d0629db92' width='200px' height='200px' title='도다리'/>
 <h1 align="center">도다리 Dodari 2</h1>
 <p align='center'>
@@ -155,25 +336,6 @@ dodari/
 
 <br/>
 
-## 상세 기능설명
-1. 도다리에 접속합니다. `http://127.0.0.1:7860`
-2. 순서1에 번역할 파일을 첨부합니다. 파일의 언어를 자동으로 감지합니다. 수동변경도 가능합니다.
-<p align="center"><img src='https://github.com/user-attachments/assets/22e4c9d3-5bf5-40f0-9712-6dfe326b54bf' width='360px'></p>
-
-3. 순서2에 번역 목표 언어를 선택합니다.
-4. 사용할 모델을 선택합니다. 기본선택 모델은 e4b모델입니다.
-<p align="center"><img src='https://github.com/user-attachments/assets/00ae73fb-dcf1-4200-8c3b-e561615eca3a' width='360px'></p>
-
-5. 순서3에 번역출력 방식을 선택합니다. 번역문을 먼저 표기하고 원문을 뒤에 표기할지, 반대로 표기할지 결정하는 겁니다. 학습용으로 번역하실 경우 원문을 먼저 표기하고 번역문을 뒤에 표기하면 좋습니다.
-6. `~다`와 `~합니다` 어투를 결정합니다. 번역시 존댓말과 반말이 섞여 나오는 것을 방지합니다.
-7. 용어집을 만들수 있습니다. 선택후 `AI용어 자동추출`버튼을 클릭하면 책에서 쓰이는 주요 이름이나 용어들이 뽑아집니다. 원하실 경우 직접 추가 삭제 가능합니다. `용어집 적용` 버튼을 클릭시하시면 적용됩니다.
-<p align="center"><img src='https://github.com/user-attachments/assets/01b939af-a7cc-4ed5-8d91-19906a46cabd' width='360px'>
-
-8. 마지막입니다. 순서4에서 `번역 실행하기`를 누르면 번역을 시작합니다.
-<p align="center"><img src='https://github.com/user-attachments/assets/c74fc2f5-c83d-4427-927b-5d3ee3e0849b' width='360px'></p>
-
-<br/>
-
 ## 삭제하기
 ### 1. 프로그램 삭제
 다운로드한 `dodari` 폴더 전체를 지웁니다.
@@ -195,6 +357,7 @@ ollama rm gemma4:31b
 
 ## 업데이트 기록
 2026.05.04 윈도우 플랫폼 추가, 특수문자관련 번역 오류 수정
+2026.05.06 다국어버전 적용
 <br/>
 
 ## 개발 뒷이야기
@@ -207,6 +370,7 @@ ollama rm gemma4:31b
 7. 번역 품질이 제 상상을 초월할 정도로 좋았습니다. 도다리1때는 원문없이 도저히 번역문만 읽을수가 없었는데 지금은 번역문 파일만 다운받아서 읽어도 아무 문제가 없습니다. IT책, 사회과학책 뿐만 아니라 소설책까지 말입니다.
 8. 도다리1때는 네이버 스마트스토어에서 의뢰를 받아 유료 번역을 하곤 했는데 이제 그 시대는 끝난것 같습니다. 도다리2의 31b모델로 직접 번역하시면 구글 제미나이의 번역 품질 거의 그대로를 즐기실수 있습니다. 그래도 <strong>[네이버🛒스토어](https://smartstore.naver.com/ai_dodari/products/10259674404)</strong>는 계속 운영하겠습니다. 제가 주식 인버스를 탔거든요!
 <br/>
+
 
 ---
 

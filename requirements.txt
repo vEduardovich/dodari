@@ -5,5 +5,5 @@ nltk==3.9.4
 beautifulsoup4==4.14.3
 gradio==6.13.0
 xmltodict==1.0.4
-docling==2.90.0
 PyMuPDF==1.27.2.2
+docling==2.90.0

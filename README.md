@@ -2,7 +2,7 @@
 <img src='https://github.com/user-attachments/assets/6b6a73f6-087c-439c-869f-5e0d0629db92' width='200px' height='200px' title='Dodari'/>
 <h1 align="center">Dodari 2</h1>
 <p align='center'>
-English | <a href='https://github.com/vEduardovich/dodari/README.ko.md'>한국어</a> <br/>
+English | <a href='https://github.com/vEduardovich/dodari/blob/main/README.ko.md'>한국어</a> <br/>
 Dodari 2 is a multilingual AI translator that uses Google's latest AI to translate <br/>EPUB, PDF, and TXT documents with genre-aware, context-sensitive accuracy.<br/>
 -------<br/>
 <span style='font-size:0.9em;'>*Successor to Dodari 1 (released March 2024)</span>

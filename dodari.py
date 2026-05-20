@@ -8,7 +8,7 @@ from typing import List, Union, Sequence
 from datetime import timedelta
 import logging, warnings
 import copy
-import re, time, platform, shutil, zipfile, subprocess, json, locale
+import re, time, platform, shutil, zipfile, subprocess, socket, json, locale
 import requests
 import chardet
 
@@ -43,9 +43,15 @@ from xml.etree.ElementTree import parse
 import atexit
 
 def cleanup_llm_server():
-    if platform.system() != 'Windows':
-        print("\n[SHUTDOWN] Stopping MLX API server...")
-        os.system("pkill -f 'mlx_vlm.server'")
+    print("\n[SHUTDOWN] Shutting down LLM API server...")
+    os.system("pkill -f 'mlx_vlm.server'")
+    os.system("pkill -f 'vllm.entrypoints.openai.api_server'")
+    for _ in range(10):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(('localhost', 8000)) != 0:
+                break
+        time.sleep(0.5)
+    print("[SHUTDOWN] Port 8000 released")
 
 atexit.register(cleanup_llm_server)
 
@@ -828,11 +834,14 @@ class Dodari:
 
         self.app = None
         self.max_len = 512
-        if platform.system() == 'Windows':
+        if platform.system() == 'Linux':
+            self.translate_batch_size = 8
+            self.translate_workers = 16
+        elif platform.system() == 'Windows':
             self.translate_batch_size = 5
             self.translate_workers = 1
         else:
-            self.translate_batch_size = 20
+            self.translate_batch_size = 15
             self.translate_workers = 4
         self.kv_bits = 8
         self.temperature = 1
@@ -852,6 +861,9 @@ class Dodari:
         if platform.system() == 'Windows':
             self.gemma_api_url = 'http://localhost:11434/v1/chat/completions'
             self.gemma_model = 'gemma4:e4b'
+        elif platform.system() == 'Linux':
+            self.gemma_api_url = 'http://localhost:8000/v1/chat/completions'
+            self.gemma_model = 'cyankiwi/gemma-4-31B-it-AWQ-4bit'
         else:
             self.gemma_api_url = 'http://localhost:8000/v1/chat/completions'
             self.gemma_model = 'mlx-community/gemma-4-e4b-it-8bit'
@@ -944,6 +956,9 @@ class Dodari:
                         if platform.system() == 'Windows':
                             _model_choices = ["gemma4:e4b", "gemma4:31b"]
                             _model_default = "gemma4:e4b"
+                        elif self.platform == 'Linux':
+                            _model_choices = ["cyankiwi/gemma-4-31B-it-AWQ-4bit"]
+                            _model_default = "cyankiwi/gemma-4-31B-it-AWQ-4bit"
                         else:
                             _model_choices = [
                                 "mlx-community/gemma-4-e4b-it-8bit",
@@ -1248,27 +1263,81 @@ class Dodari:
         gr.Info(f"Switching model to {new_model}. Please wait.")
         self.gemma_model = new_model
 
-        if platform.system() == 'Windows':
+        if 'e4b' in new_model.lower():
+            self.translate_batch_size = 25
+        else:
+            self.translate_batch_size = 15
+
+        cleanup_llm_server()
+
+        current_platform = platform.system()
+
+        if current_platform == 'Darwin':
+            mlx_python = os.environ.get('MLX_PYTHON', 'python3')
+            cmd = (
+                f"{mlx_python} -m mlx_vlm.server "
+                f"--model {new_model} "
+                f"--kv-bits {self.kv_bits} "
+                f"--port 8000"
+            )
+            print(f"[Model Switch] Mac(MLX) params: batch={self.translate_batch_size}, workers={self.translate_workers}, kv-bits={self.kv_bits}")
+            subprocess.Popen(cmd, shell=True)
+
+        elif current_platform == 'Linux':
+            vllm_model = os.environ.get('VLLM_MODEL', 'cyankiwi/gemma-4-31B-it-AWQ-4bit')
+            vllm_python = os.environ.get('VLLM_PYTHON', 'python3')
+            cmd = (
+                f"{vllm_python} -m vllm.entrypoints.openai.api_server "
+                f"--model {vllm_model} "
+                f"--quantization compressed-tensors "
+                f"--dtype bfloat16 "
+                f"--gpu-memory-utilization 0.95 "
+                f"--max-model-len 4096 "
+                f"--max-num-seqs 16 "
+                '--limit-mm-per-prompt \'{"image": 0, "video": 0}\' '
+                f"--port 8000"
+            )
+            print(f"[Model Switch] Linux(vLLM) model: {vllm_model}")
+            subprocess.Popen(cmd, shell=True)
+
+        elif current_platform == 'Windows':
             print(f"[Model Switch] Windows(Ollama): no restart needed, switching → {new_model}")
             gr.Info(f"Ollama model switched to {new_model}. (No server restart needed)")
             return
 
-        cleanup_llm_server()
-        time.sleep(2)
+        else:
+            print(f"[Model Switch] Unsupported platform: {current_platform}")
+            gr.Warning(f"Platform '{current_platform}' is not supported.")
+            return
 
-        mlx_python = os.environ.get('MLX_PYTHON', 'python3')
-        cmd = (
-            f"{mlx_python} -m mlx_vlm.server "
-            f"--model {new_model} "
-            f"--kv-bits {self.kv_bits} "
-            f"--port 8000"
-        )
-        print(f"[Model Switch] MLX params: batch={self.translate_batch_size}, workers={self.translate_workers}, kv-bits={self.kv_bits}")
-        subprocess.Popen(cmd, shell=True)
-        time.sleep(8)
+        model_short = new_model.split('/')[-1]
+        _base_url = self.gemma_api_url.rsplit('/v1/', 1)[0]
+        model_confirmed = False
+        for attempt in range(30):
+            try:
+                resp = requests.get(f'{_base_url}/v1/models', timeout=3)
+                if resp.status_code == 200:
+                    model_ids = [m.get('id', '') for m in resp.json().get('data', [])]
+                    if any(new_model in mid or model_short in mid for mid in model_ids):
+                        model_confirmed = True
+                        break
+            except Exception:
+                pass
+            print(f'[Model Loading] {attempt + 1}/30, retrying in 2s...')
+            time.sleep(2)
 
-        gr.Info("Model setup complete!")
-        print(f"[Model Switch] Done!\n")
+        if model_confirmed:
+            print(f"\n{'=' * 60}")
+            print(f"  Active model: {model_short}")
+            print(f"  batch={self.translate_batch_size}  workers={self.translate_workers}  kv-bits={self.kv_bits}")
+            print(f"{'=' * 60}\n")
+            gr.Info(f"[{model_short}] Model loaded successfully!")
+        else:
+            print(f"\n{'!' * 60}")
+            print(f"  Model response check failed: {model_short}")
+            print(f"  Check the server log (terminal or nohup.out)")
+            print(f"{'!' * 60}\n")
+            gr.Warning("Model server did not respond. Translation may fail.")
 
     def format_result_message(self, sec_or_msg):
         if not sec_or_msg:
@@ -1314,6 +1383,7 @@ class Dodari:
             _guide_key = {
                 'Darwin': 'server_guide_mac',
                 'Windows': 'server_guide_windows',
+                'Linux': 'server_guide_linux',
             }.get(platform.system(), 'server_guide_default')
             _guide = self._T(_guide_key)
             return (
@@ -1504,36 +1574,32 @@ class Dodari:
                     os.makedirs(self.output_folder, exist_ok=True)
                     progress(0, desc='[PDF] Structuring HTML with Docling...')
 
-                    original_cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-                    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-                    
-                    print(f"\n[PDF] Processing: {file['path']} - Docling CPU mode")
+                    print(f"\n[PDF] Processing: {file['path']} - Docling mode")
                     progress(0, desc='[PDF] Loading Docling engine...')
-                    
-                    try:
-                        pipeline_options = PdfPipelineOptions()
-                        pipeline_options.generate_picture_images = True
-                        pipeline_options.images_scale = 2.0
+
+                    pipeline_options = PdfPipelineOptions()
+                    pipeline_options.generate_picture_images = True
+                    pipeline_options.images_scale = 2.0
+                    if sys.platform == 'darwin':
                         pipeline_options.accelerator_options = AcceleratorOptions(
-                            num_threads=4 if platform.system() == 'Windows' else 8,
+                            num_threads=8,
+                            device=AcceleratorDevice.AUTO
+                        )
+                    else:
+                        pipeline_options.accelerator_options = AcceleratorOptions(
+                            num_threads=4,
                             device=AcceleratorDevice.CPU
                         )
-                        
-                        print("[PDF] Initializing DocumentConverter...")
-                        converter = DocumentConverter(
-                            format_options={'pdf': PdfFormatOption(pipeline_options=pipeline_options)}
-                        )
 
-                        print("[PDF] Starting HTML structure extraction (may take 1-3 min depending on PDF size)...")
-                        progress(5, desc='[PDF] Extracting HTML structure (CPU)...')
-                        result = converter.convert(file['path'])
-                        print("[PDF] Structure extraction complete!")
-                        
-                    finally:
-                        if original_cuda_visible:
-                            os.environ["CUDA_VISIBLE_DEVICES"] = original_cuda_visible
-                        else:
-                            del os.environ["CUDA_VISIBLE_DEVICES"]
+                    print("[PDF] Initializing DocumentConverter...")
+                    converter = DocumentConverter(
+                        format_options={'pdf': PdfFormatOption(pipeline_options=pipeline_options)}
+                    )
+
+                    print("[PDF] Starting HTML structure extraction (may take 1-3 min depending on PDF size)...")
+                    progress(5, desc='[PDF] Extracting HTML structure...')
+                    result = converter.convert(file['path'])
+                    print("[PDF] Structure extraction complete!")
 
                     picture_delete = set()
                     picture_skip = set()

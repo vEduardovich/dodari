@@ -102,7 +102,8 @@
 1. <a href='https://github.com/vEduardovich/dodari/archive/refs/heads/main.zip' title='압축 파일 다운로드' style='text-align:center'>압축 파일 다운로드</a> 클릭
 2. 압축해제 후 
 - 윈도우 사용자는 `start_windows.bat` 더블 클릭
-- 맥이나 우분투 사용자는 터미널 창에서 `sh start_mac.sh` 실행
+- 맥 사용자는 터미널 창에서 `sh start_mac.sh` 실행
+- 우분투(Linux) 사용자는 터미널 창에서 `sh start_ubuntu.sh` 실행
 3.  `http://127.0.0.1:7860` 에 접속하면 도다리2가 보입니다.
 
 _첫 실행시 관련 프로그램 설치와 AI 모델을 다운로드 하는데 아주 오랜 시간이 걸립니다!_
@@ -116,7 +117,8 @@ git clone https://github.com/vEduardovich/dodari.git
 cd dodari
 ```
 - 윈도우는 `start_windows.bat` 실행
-- 맥, 우분투는 `sh start_mac.sh` 실행
+- 맥은 `sh start_mac.sh` 실행
+- 우분투(Linux)는 `sh start_ubuntu.sh` 실행
 
 
 <br/>
@@ -128,7 +130,8 @@ dodari/
 ├── dodari_env         # 도다리 실행을 위한 관련 파일들이 설치되는 폴더
 ├── dodari.py          # 메인 애플리케이션
 ├── start_mac.sh       # 맥 실행 스크립트
-├── start_windows.sh   # 윈도우 실행 스크립트
+├── start_ubuntu.sh    # 우분투 실행 스크립트
+├── start_windows.bat  # 윈도우 실행 스크립트
 └── requirements.txt   # 의존성 목록
 ```
 
@@ -179,6 +182,7 @@ ollama rm gemma4:31b
 ## 업데이트 기록
 2026.05.04 윈도우 플랫폼 추가, 특수문자관련 번역 오류 수정
 2026.05.06 다국어버전 적용
+2026.05.20 윈도우 unix줄바꿈 버그 수정 with [ultra-vi](https://github.com/ultra-vi)<br/>우분투 awq 번역 모델 추가
 <br/>
 
 ## 개발 뒷이야기

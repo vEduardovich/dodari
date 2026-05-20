@@ -1,3 +1,4 @@
+<h1 align="center">도다리 Dodari 2</h1>
 <p align="center">
 <img src='https://github.com/user-attachments/assets/6b6a73f6-087c-439c-869f-5e0d0629db92' width='200px' height='200px' title='Dodari'/>
 <h1 align="center">Dodari 2</h1>
@@ -102,6 +103,7 @@ For beginners:
 2. Extract the archive, then:
 - **Windows**: double-click `start_windows.bat`
 - **Mac**: run `sh start_mac.sh` in a terminal window
+- **Ubuntu/Linux**: run `sh start_ubuntu.sh` in a terminal window
 3. Open `http://127.0.0.1:7860` in your browser — Dodari 2 will be ready.
 
 _On first run, setup and AI model download will take a long time. Please be patient!_
@@ -116,6 +118,7 @@ cd dodari
 ```
 - Windows: run `start_windows.bat`
 - Mac: run `sh start_mac.sh`
+- Ubuntu/Linux: run `sh start_ubuntu.sh`
 
 
 <br/>
@@ -127,6 +130,7 @@ dodari/
 ├── dodari_env         # Folder where runtime dependencies are installed
 ├── dodari.py          # Main application
 ├── start_mac.sh       # Mac launch script
+├── start_ubuntu.sh    # Ubuntu(vLLM) launch script
 ├── start_windows.bat  # Windows launch script
 └── requirements.txt   # Dependency list
 ```
@@ -179,6 +183,7 @@ Control Panel → Programs → Uninstall Ollama
 ## Changelog
 * 2026.05.04 — Added Windows support; fixed translation errors related to special characters.
 * 2026.05.06 Implemented Multilingual Support 
+* 2026.05.20 Fixed a Unix line ending bug on Windows with [ultra-vi](https://github.com/ultra-vi)<br/>Added an AWQ translation model for Ubuntu.
 <br/>
 
 ---

@@ -3,8 +3,14 @@ chcp 65001 >nul
 
 rem === Step 1: Check Python 3.11+ ===
 echo [1/6] Checking Python installation...
+set PYTHON_CMD=
 python --version >nul 2>&1
-if errorlevel 1 (
+if not errorlevel 1 set PYTHON_CMD=python
+if "%PYTHON_CMD%"=="" (
+    py --version >nul 2>&1
+    if not errorlevel 1 set PYTHON_CMD=py
+)
+if "%PYTHON_CMD%"=="" (
     echo.
     echo [Error] Python is not installed.
     echo Please install Python 3.11 or higher and run this script again.
@@ -13,7 +19,7 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-for /f "tokens=2 delims= " %%v in ('python --version 2^>^&1') do set PY_VER=%%v
+for /f "tokens=2 delims= " %%v in ('%PYTHON_CMD% --version 2^>^&1') do set PY_VER=%%v
 for /f "tokens=1,2 delims=." %%a in ("%PY_VER%") do (
     set PY_MAJOR=%%a
     set PY_MINOR=%%b
@@ -77,7 +83,7 @@ ollama list 2>nul | findstr /i "gemma4:e4b" >nul
 if not errorlevel 1 goto MODEL_OK
 
 echo   Downloading base AI model (gemma4:e4b). (approx. 3GB, this will take a while)
-echo   The high-quality model (gemma4:31b) can be selected in the UI — Ollama handles it automatically.
+echo   The high-quality model (gemma4:31b) can be selected in the UI -- Ollama handles it automatically.
 echo   Download progress is shown below. Please wait until complete.
 echo.
 ollama pull gemma4:e4b
@@ -98,7 +104,7 @@ echo [4/6] Checking Python virtual environment...
 if exist "%~dp0\dodari_env\Scripts\activate.bat" goto VENV_OK
 
 echo   Creating virtual environment...
-python -m venv dodari_env
+%PYTHON_CMD% -m venv dodari_env
 if errorlevel 1 (
     echo.
     echo [Error] Virtual environment creation failed.
@@ -110,7 +116,7 @@ echo   Installing required packages. This may take a few minutes on first run...
 cd /d "%~dp0\dodari_env\Scripts"
 call activate.bat
 cd /d "%~dp0"
-python -m pip install --upgrade pip >nul
+%PYTHON_CMD% -m pip install --upgrade pip >nul
 pip install -r requirements.txt
 if errorlevel 1 (
     echo.

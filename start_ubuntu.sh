@@ -99,7 +99,7 @@ echo ""
 
 # Save the absolute path of the Python with vLLM installed
 # Used by dodari.py when switching models → avoids venv isolation issues
-export VLLM_PYTHON=$(python3 -c "import sys; print(sys.executable)")
+export VLLM_PYTHON=$(dodari_env/bin/python3 -c "import sys; print(sys.executable)")
 # Export local model path so dodari.py's reload_llm_server uses the same path
 export VLLM_MODEL="$MODEL_PATH"
 echo "vLLM Python path: $VLLM_PYTHON"
@@ -108,7 +108,7 @@ echo "vLLM Python path: $VLLM_PYTHON"
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 # Start vLLM server (logs printed directly to terminal)
-python3 -m vllm.entrypoints.openai.api_server \
+dodari_env/bin/python3 -m vllm.entrypoints.openai.api_server \
     --model "$MODEL_PATH" \
     --served-model-name "$HF_MODEL_ID" \
     --quantization compressed-tensors \

@@ -66,10 +66,10 @@ echo "Starting Gemma4 API server in the background..."
 
 # Save the absolute path of the Python with mlx_vlm installed
 # Used by dodari.py when switching models → avoids venv isolation issues
-export MLX_PYTHON=$(python3 -c "import sys; print(sys.executable)")
+export MLX_PYTHON=$(dodari_env/bin/python3 -c "import sys; print(sys.executable)")
 echo "MLX Python path: $MLX_PYTHON"
 
-python3 -m mlx_vlm.server --model mlx-community/gemma-4-31b-it-4bit --kv-bits 8 --port 8000 &
+dodari_env/bin/python3 -m mlx_vlm.server --model mlx-community/gemma-4-31b-it-4bit --kv-bits 8 --port 8000 &
 SERVER_PID=$!
 
 # Shut down the API server safely when Dodari exits (Ctrl+C)

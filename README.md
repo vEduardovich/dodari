@@ -184,6 +184,7 @@ Control Panel → Programs → Uninstall Ollama
 * 2026.05.04 — Added Windows support; fixed translation errors related to special characters.
 * 2026.05.06 Implemented Multilingual Support 
 * 2026.05.20 Fixed a Unix line ending bug on Windows with [ultra-vi](https://github.com/ultra-vi)<br/>Added an AWQ translation model for Ubuntu.
+* 2026.05.28 Fixed an issue where a Homebrew Python auto-update could break the launch environment. Resolved by specifying explicit Python paths.
 <br/>
 
 ---

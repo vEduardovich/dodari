@@ -102,6 +102,8 @@ SUPPORTED_LANGUAGES = {
 LANG_CODE_TO_NAME = {v[0]: k for k, v in SUPPORTED_LANGUAGES.items()}
 LANG_CODE_TO_NAME['zh-cn'] = '중국어'
 LANG_CODE_TO_NAME['zh-tw'] = '중국어'
+LANG_CODE_TO_NAME['nb'] = '노르웨이어'
+LANG_CODE_TO_NAME['nn'] = '노르웨이어'
 
 GENRE_CHOICES_KO   = ["IT 및 엔지니어링", "문학 및 소설", "인문 및 사회과학", "비즈니스 및 경제", "영상 및 대본", "일반 문서(기본)"]
 TONE_CHOICES_KO    = ["서술체 (~다)", "경어체 (~합니다)"]

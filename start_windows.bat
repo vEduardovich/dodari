@@ -117,7 +117,7 @@ cd /d "%~dp0\dodari_env\Scripts"
 call activate.bat
 cd /d "%~dp0"
 %PYTHON_CMD% -m pip install --upgrade pip >nul
-pip install -r requirements.txt
+dodari_env\Scripts\pip.exe install -r requirements.txt --no-cache-dir
 if errorlevel 1 (
     echo.
     echo [Error] Package installation failed.

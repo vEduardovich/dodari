@@ -19,16 +19,40 @@ echo ""
 # ----------------------------------------------------------
 # 1. Virtual environment setup (first run only)
 # ----------------------------------------------------------
+PYTHON_CMD=""
+for cmd in python3.14 python3.13 python3.12 python3.11; do
+    if command -v $cmd &>/dev/null; then
+        PYTHON_CMD=$cmd
+        break
+    fi
+done
+if [ -z "$PYTHON_CMD" ]; then
+    if python3 -c "import sys; exit(0 if sys.version_info >= (3,11) else 1)" 2>/dev/null; then
+        PYTHON_CMD=python3
+    fi
+fi
+if [ -z "$PYTHON_CMD" ]; then
+    CURRENT_VER=$(python3 --version 2>/dev/null || echo "not installed")
+    echo ""
+    echo "[Error] Python 3.11 or higher is required. (current: $CURRENT_VER)"
+    echo ""
+    echo "Install: sudo apt install python3.11 python3.11-venv"
+    echo ""
+    exit 1
+fi
+echo "Python version: $($PYTHON_CMD --version)"
+echo ""
+
 if [ ! -d "dodari_env" ]; then
     echo "First run: setting up Dodari environment."
     echo "Installing required packages... (this may take a few minutes)"
     echo ""
 
-    python3 -m venv dodari_env
+    $PYTHON_CMD -m venv dodari_env
     . dodari_env/bin/activate
 
     # Install base packages (requirements.txt — no mlx, Ubuntu compatible)
-    pip install -r requirements.txt
+    dodari_env/bin/pip install -r requirements.txt --no-cache-dir
 
     if [ $? -ne 0 ]; then
         echo ""
@@ -45,7 +69,7 @@ if [ ! -d "dodari_env" ]; then
 
     # Install vLLM (CUDA 12.1 baseline, includes PyTorch)
     # For other CUDA versions: https://docs.vllm.ai/en/latest/getting_started/installation.html
-    pip install vllm "huggingface_hub[cli]>=1.11.0"
+    dodari_env/bin/pip install vllm "huggingface_hub[cli]>=1.11.0" --no-cache-dir
 
     if [ $? -ne 0 ]; then
         echo ""

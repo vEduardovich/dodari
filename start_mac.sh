@@ -2,7 +2,7 @@
 
 # Search for Python 3.11+ (highest version first)
 PYTHON_CMD=""
-for cmd in python3.13 python3.12 python3.11; do
+for cmd in python3.14 python3.13 python3.12 python3.11; do
     if command -v $cmd &>/dev/null; then
         PYTHON_CMD=$cmd
         break
@@ -43,9 +43,9 @@ then
     $PYTHON_CMD -m venv dodari_env
     . dodari_env/bin/activate
 
-    pip install --upgrade pip
-    pip install -r requirements.txt
-    pip install mlx-vlm mlx 2>/dev/null || true
+    dodari_env/bin/pip install --upgrade pip --no-cache-dir
+    dodari_env/bin/pip install -r requirements.txt --no-cache-dir
+    dodari_env/bin/pip install mlx-vlm mlx --no-cache-dir 2>/dev/null || true
 
     if [ $? -ne 0 ]; then
         echo ""

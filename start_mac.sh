@@ -45,7 +45,7 @@ then
 
     dodari_env/bin/pip install --upgrade pip --no-cache-dir
     dodari_env/bin/pip install -r requirements.txt --no-cache-dir
-    dodari_env/bin/pip install mlx-vlm mlx --no-cache-dir 2>/dev/null || true
+    dodari_env/bin/pip install mlx-vlm==0.5.0 mlx==0.31.2 --no-cache-dir 2>/dev/null || true
 
     if [ $? -ne 0 ]; then
         echo ""

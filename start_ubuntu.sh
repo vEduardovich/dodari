@@ -69,7 +69,7 @@ if [ ! -d "dodari_env" ]; then
 
     # Install vLLM (CUDA 12.1 baseline, includes PyTorch)
     # For other CUDA versions: https://docs.vllm.ai/en/latest/getting_started/installation.html
-    dodari_env/bin/pip install vllm "huggingface_hub[cli]>=1.11.0" --no-cache-dir
+    dodari_env/bin/pip install vllm==0.21.0 "huggingface_hub[cli]>=1.11.0,<2.0" --no-cache-dir
 
     if [ $? -ne 0 ]; then
         echo ""

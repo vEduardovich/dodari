@@ -116,7 +116,7 @@ echo   Installing required packages. This may take a few minutes on first run...
 cd /d "%~dp0\dodari_env\Scripts"
 call activate.bat
 cd /d "%~dp0"
-%PYTHON_CMD% -m pip install --upgrade pip >nul
+dodari_env\Scripts\pip.exe install --upgrade pip --no-cache-dir
 dodari_env\Scripts\pip.exe install -r requirements.txt --no-cache-dir
 if errorlevel 1 (
     echo.

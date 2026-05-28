@@ -2366,7 +2366,7 @@ class Dodari:
                                 detected = top.lang if top.prob >= 0.8 else 'en'
                             except Exception:
                                 detected = 'en'
-                            normalized = 'zh' if detected.startswith('zh') else detected
+                            normalized = detected.split('-')[0].lower()
                             if normalized in LANG_CODE_TO_NAME:
                                 check_lang = normalized
                                 break
@@ -2413,7 +2413,7 @@ class Dodari:
                 except Exception:
                     check_lang = 'en'
 
-            normalized_lang = 'zh' if check_lang.startswith('zh') else check_lang
+            normalized_lang = check_lang.split('-')[0].lower()
             self.origin_lang = normalized_lang
             self.origin_lang_name = LANG_CODE_TO_NAME.get(normalized_lang, f"{self._T('lang_unknown')} ({check_lang})")
             origin_dropdown_val = self.origin_lang_name if normalized_lang in LANG_CODE_TO_NAME else None

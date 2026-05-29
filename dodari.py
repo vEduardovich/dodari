@@ -868,7 +868,7 @@ class Dodari:
             self.gemma_model = 'cyankiwi/gemma-4-31B-it-AWQ-4bit'
         else:
             self.gemma_api_url = 'http://localhost:8000/v1/chat/completions'
-            self.gemma_model = 'mlx-community/gemma-4-e4b-it-8bit'
+            self.gemma_model = 'mlx-community/gemma-4-31b-it-4bit'
 
         self.output_folder = 'outputs'
         self.temp_folder_1 = 'temp_1'
@@ -966,7 +966,7 @@ class Dodari:
                                 "mlx-community/gemma-4-e4b-it-8bit",
                                 "mlx-community/gemma-4-31b-it-4bit",
                             ]
-                            _model_default = _model_choices[0]
+                            _model_default = "mlx-community/gemma-4-31b-it-4bit"
                         self.model_radio = gr.Radio(
                             choices=_model_choices,
                             label=self._T('model_label'),

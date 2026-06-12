@@ -137,8 +137,8 @@ dodari_env/bin/python3 -m vllm.entrypoints.openai.api_server \
     --served-model-name "$HF_MODEL_ID" \
     --quantization compressed-tensors \
     --dtype bfloat16 \
-    --gpu-memory-utilization 0.95 \
-    --max-model-len 4096 \
+    --gpu-memory-utilization 0.90 \
+    --max-model-len 3072 \
     --max-num-seqs 16 \
     --enforce-eager \
     --limit-mm-per-prompt '{"image": 0, "video": 0}' \

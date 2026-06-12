@@ -1293,8 +1293,8 @@ class Dodari:
                 f"--model {vllm_model} "
                 f"--quantization compressed-tensors "
                 f"--dtype bfloat16 "
-                f"--gpu-memory-utilization 0.95 "
-                f"--max-model-len 4096 "
+                f"--gpu-memory-utilization 0.90 "
+                f"--max-model-len 3072 "
                 f"--max-num-seqs 16 "
                 '--limit-mm-per-prompt \'{"image": 0, "video": 0}\' '
                 f"--port 8000"

@@ -185,6 +185,7 @@ ollama rm gemma4:31b
 * 2026.05.20 윈도우 unix줄바꿈 버그 수정 with [ultra-vi](https://github.com/ultra-vi)<br/>우분투 awq 번역 모델 추가
 * 2026.05.28 Homebrew가 Python 자동 업데이트시 기존 실행 환경이 깨지는 문제 발생. 명시적 경로 지정으로 수정완료
 * 2026.06.12 우분투 GPU 메모리 설정 최적화. 모니터·데스크탑 환경과 VRAM 충돌로 번역 중 멈추는 문제 수정
+* 2026.06.14 EPUB 번역 대상 태그 확장
 <br/>
 
 ## 개발 뒷이야기

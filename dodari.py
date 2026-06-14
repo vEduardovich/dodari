@@ -825,7 +825,7 @@ def save_ui_config(lang_code: str):
         print(f'[ui_config] Save failed: {e}')
 
 
-EPUB_TRANSLATE_TAGS = {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'span', 'td', 'th', 'blockquote'}
+EPUB_TRANSLATE_TAGS = {'div', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'span', 'td', 'th', 'blockquote'}
 
 class Dodari:
     def __init__(self):
@@ -1452,18 +1452,14 @@ class Dodari:
                             continue
 
                         _leaf_filter = EPUB_TRANSLATE_TAGS - {'span'}
-                        p_tags_1 = [
-                            tag for tag in soup_1.find_all(EPUB_TRANSLATE_TAGS)
-                            if tag.get_text(strip=True)
-                            and not tag.find(_leaf_filter)
-                            and not (tag.name == 'span' and tag.parent and tag.parent.name in EPUB_TRANSLATE_TAGS)
-                        ]
-                        p_tags_2 = [
-                            tag for tag in soup_2.find_all(EPUB_TRANSLATE_TAGS)
-                            if tag.get_text(strip=True)
-                            and not tag.find(_leaf_filter)
-                            and not (tag.name == 'span' and tag.parent and tag.parent.name in EPUB_TRANSLATE_TAGS)
-                        ]
+                        _cand_1 = [tag for tag in soup_1.find_all(EPUB_TRANSLATE_TAGS)
+                                   if tag.get_text(strip=True) and not tag.find(_leaf_filter)]
+                        _ids_1 = {id(t) for t in _cand_1}
+                        p_tags_1 = [t for t in _cand_1 if not any(id(p) in _ids_1 for p in t.parents)]
+                        _cand_2 = [tag for tag in soup_2.find_all(EPUB_TRANSLATE_TAGS)
+                                   if tag.get_text(strip=True) and not tag.find(_leaf_filter)]
+                        _ids_2 = {id(t) for t in _cand_2}
+                        p_tags_2 = [t for t in _cand_2 if not any(id(p) in _ids_2 for p in t.parents)]
 
                         only_texts = []
                         whole_particle = []

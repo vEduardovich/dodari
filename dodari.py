@@ -77,6 +77,69 @@ warnings.filterwarnings('ignore')
 nltk.download('punkt_tab')
 PathType = Union[str, os.PathLike]
 
+def _dodari_is_dialogue(text):
+    if not text:
+        return False
+    caps = len(re.findall(r'(?:^|[\s)"\d.])[A-Z]{2,}(?:\s+[A-Z]+){0,2}\s+"', text))
+    if caps >= 2:
+        return True
+    return text.count('"') // 2 >= 3
+
+def _dodari_split_paragraphs(text, mode):
+    if not text or '<' in text:
+        return [text] if text else []
+    if not _dodari_is_dialogue(text):
+        return [text]
+    n = len(text)
+    bnd = []
+    if mode == 'bi':
+        for m in re.finditer(r'\)\s*\d*', text):
+            bnd.append(m.end())
+    else:
+        for i, ch in enumerate(text):
+            if ch == '"':
+                prev = text[i - 1] if i > 0 else ' '
+                if prev not in ' \t\n(':
+                    j = i + 1
+                    mm = re.match(r'\s*\d+', text[j:])
+                    if mm:
+                        j += mm.end()
+                    bnd.append(j)
+    bnd = [b for b in bnd if 0 < b < n]
+    if not bnd:
+        return [text]
+    segs = []
+    prev = 0
+    for b in bnd:
+        if b <= prev:
+            continue
+        segs.append(text[prev:b])
+        prev = b
+    if prev < n:
+        segs.append(text[prev:])
+    segs = [s.strip() for s in segs if s.strip()]
+    return segs if len(segs) >= 2 else [text]
+
+def _dodari_set_block(tag, text, mode, soup):
+    tag.clear()
+    segs = _dodari_split_paragraphs(text or '', mode)
+    if len(segs) <= 1:
+        tag.string = segs[0] if segs else ''
+        return
+    if tag.name == 'p':
+        tag.string = segs[0]
+        anchor = tag
+        for seg in segs[1:]:
+            new_p = soup.new_tag('p')
+            new_p.string = seg
+            anchor.insert_after(new_p)
+            anchor = new_p
+    else:
+        for seg in segs:
+            new_p = soup.new_tag('p')
+            new_p.string = seg
+            tag.append(new_p)
+
 def get_base64_image(path):
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode()
@@ -1905,11 +1968,8 @@ class Dodari:
                             trans_1 = assembled_1[t_idx]
                             trans_2 = assembled_2[t_idx]
                             
-                            valid_tag_1.clear()
-                            valid_tag_1.string = trans_1
-
-                            valid_tags_2[t_idx].clear()
-                            valid_tags_2[t_idx].string = trans_2
+                            _dodari_set_block(valid_tag_1, trans_1, 'bi', soup_1)
+                            _dodari_set_block(valid_tags_2[t_idx], trans_2, 'mono', soup_2)
                             
                     progress(0.95, desc=f'[PDF] EPUB packaging... (elapsed: {format_korean_time(int(time.time() - self.start))})')
                     if bilingual_order_val == "원문(번역문)":

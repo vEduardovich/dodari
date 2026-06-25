@@ -187,6 +187,7 @@ Control Panel → Programs → Uninstall Ollama
 * 2026.05.28 Fixed an issue where a Homebrew Python auto-update could break the launch environment. Resolved by specifying explicit Python paths.
 * 2026.06.12 Optimized Ubuntu GPU memory settings. Fixed translation crashes caused by VRAM conflicts with monitor/desktop environments.
 * 2026.06.14 Expanded EPUB translation tag coverage.
+* 2026.06.25 PDF dialogue books now split into per-speaker paragraphs, restoring line breaks.
 <br/>
 
 ---

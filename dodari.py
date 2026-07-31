@@ -8,7 +8,7 @@ from typing import List, Union, Sequence
 from datetime import timedelta
 import logging, warnings
 import copy
-import re, time, platform, shutil, zipfile, subprocess, socket, json, locale
+import re, time, platform, shutil, zipfile, subprocess, socket, json, locale, tempfile
 import requests
 import chardet
 
@@ -76,6 +76,637 @@ warnings.filterwarnings('ignore')
 
 nltk.download('punkt_tab')
 PathType = Union[str, os.PathLike]
+
+RESUME_SNAPSHOT_NAME = 'progress.json'
+RESUME_CHUNK_DIR = 'chunks'
+RESUME_STEM_LEN = 10
+RESUME_HASH_LEN = 6
+RESUME_SETTING_KEYS = ('model', 'target_lang', 'genre', 'tone', 'bilingual_order')
+
+def _dodari_resume_settings_signature(settings):
+    parts = []
+    for key in RESUME_SETTING_KEYS:
+        parts.append('{k}={v}'.format(k=key, v=settings.get(key, '')))
+    return '|'.join(parts)
+
+def _dodari_resume_sanitize(text):
+    safe = re.sub(r'[^0-9A-Za-z가-힣]+', '_', str(text))
+    return safe.strip('_')
+
+def _dodari_resume_temp_basename(source_name, settings):
+    import hashlib as _hashlib
+    stem = os.path.splitext(os.path.basename(str(source_name)))[0]
+    safe = _dodari_resume_sanitize(stem)[:RESUME_STEM_LEN].strip('_')
+    if not safe:
+        safe = 'file'
+    raw = '{n}||{s}'.format(n=str(source_name), s=_dodari_resume_settings_signature(settings))
+    digest = _hashlib.sha256(raw.encode('utf-8')).hexdigest()[:RESUME_HASH_LEN]
+    return 'temp_{stem}_{h}'.format(stem=safe, h=digest)
+
+def _dodari_resume_temp_folder(basename, suffix):
+    return '{b}_{s}'.format(b=basename, s=suffix)
+
+def _dodari_resume_snapshot_path(folder):
+    return os.path.join(folder, RESUME_SNAPSHOT_NAME)
+
+def _dodari_resume_empty_snapshot():
+    return {'source': None, 'settings': {}, 'done': []}
+
+def _dodari_resume_load_snapshot(folder, settings):
+    path = _dodari_resume_snapshot_path(folder)
+    if not os.path.isfile(path):
+        return _dodari_resume_empty_snapshot()
+    try:
+        with open(path, 'r', encoding='utf-8') as fp:
+            data = json.load(fp)
+    except Exception:
+        return _dodari_resume_empty_snapshot()
+    if not isinstance(data, dict):
+        return _dodari_resume_empty_snapshot()
+    stored = data.get('signature')
+    if stored != _dodari_resume_settings_signature(settings):
+        return _dodari_resume_empty_snapshot()
+    done = data.get('done')
+    if not isinstance(done, list):
+        done = []
+    return {'source': data.get('source'), 'settings': data.get('settings') or {}, 'done': done}
+
+def _dodari_resume_save_snapshot(folder, source_name, settings, done):
+    try:
+        os.makedirs(folder, exist_ok=True)
+        payload = {
+            'source': source_name,
+            'settings': {k: settings.get(k, '') for k in RESUME_SETTING_KEYS},
+            'signature': _dodari_resume_settings_signature(settings),
+            'done': list(done),
+        }
+        path = _dodari_resume_snapshot_path(folder)
+        tmp_path = path + '.tmp'
+        with open(tmp_path, 'w', encoding='utf-8') as fp:
+            json.dump(payload, fp, ensure_ascii=False)
+            fp.flush()
+            os.fsync(fp.fileno())
+        os.replace(tmp_path, path)
+        return True
+    except Exception as err:
+        print('[Resume] Snapshot write failed: {e}'.format(e=err))
+        return False
+
+def _dodari_resume_mark_done(folder, source_name, settings, done, unit):
+    if unit not in done:
+        done.append(unit)
+    return _dodari_resume_save_snapshot(folder, source_name, settings, done)
+
+def _dodari_resume_should_resume(folder, settings):
+    if not os.path.isdir(folder):
+        return False
+    path = _dodari_resume_snapshot_path(folder)
+    if not os.path.isfile(path):
+        return False
+    try:
+        with open(path, 'r', encoding='utf-8') as fp:
+            data = json.load(fp)
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    return data.get('signature') == _dodari_resume_settings_signature(settings)
+
+def _dodari_resume_is_done(done, unit):
+    return unit in done
+
+def _dodari_resume_unit_key(folder, path):
+    try:
+        return os.path.relpath(str(path), str(folder))
+    except Exception:
+        return str(path)
+
+def _dodari_resume_chunk_key(index):
+    return 'chunk:{i}'.format(i=index)
+
+def _dodari_resume_chunk_path(folder, index):
+    return os.path.join(folder, RESUME_CHUNK_DIR, 'chunk_{i}.json'.format(i=_dodari_resume_sanitize(index)))
+
+def _dodari_resume_save_chunk(folder, index, payload):
+    try:
+        path = _dodari_resume_chunk_path(folder, index)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp_path = path + '.tmp'
+        with open(tmp_path, 'w', encoding='utf-8') as fp:
+            json.dump(payload, fp, ensure_ascii=False)
+            fp.flush()
+            os.fsync(fp.fileno())
+        os.replace(tmp_path, path)
+        return True
+    except Exception as err:
+        print('[Resume] Chunk write failed ({i}): {e}'.format(i=index, e=err))
+        return False
+
+def _dodari_resume_load_chunk(folder, index):
+    path = _dodari_resume_chunk_path(folder, index)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as fp:
+            return json.load(fp)
+    except Exception:
+        return None
+
+RESUME_STRUCT_DIR = 'pdf_struct'
+RESUME_STRUCT_VERSION = 1
+
+def _dodari_resume_struct_path(folder, index):
+    return os.path.join(folder, RESUME_STRUCT_DIR, 'struct_{i}.json'.format(i=_dodari_resume_sanitize(index)))
+
+def _dodari_resume_build_struct(html_content, picture_delete, picture_skip,
+                                code_block_images, wide_table_images, formula_images):
+    return {
+        'version': RESUME_STRUCT_VERSION,
+        'html': str(html_content),
+        'picture_delete': sorted(picture_delete or []),
+        'picture_skip': sorted(picture_skip or []),
+        'code_block_images': list(code_block_images or []),
+        'wide_table_images': {str(k): v for k, v in dict(wide_table_images or {}).items()},
+        'formula_images': list(formula_images or []),
+    }
+
+def _dodari_resume_restore_struct(payload):
+    if not isinstance(payload, dict):
+        return None
+    if payload.get('version') != RESUME_STRUCT_VERSION:
+        return None
+    html_content = payload.get('html')
+    if not isinstance(html_content, str) or not html_content.strip():
+        return None
+    try:
+        wide_raw = payload.get('wide_table_images') or {}
+        wide_table_images = {int(k): v for k, v in dict(wide_raw).items()}
+    except Exception:
+        return None
+    return {
+        'html': html_content,
+        'picture_delete': set(payload.get('picture_delete') or []),
+        'picture_skip': set(payload.get('picture_skip') or []),
+        'code_block_images': list(payload.get('code_block_images') or []),
+        'wide_table_images': wide_table_images,
+        'formula_images': list(payload.get('formula_images') or []),
+    }
+
+def _dodari_resume_save_struct(folder, index, html_content, picture_delete, picture_skip,
+                               code_block_images, wide_table_images, formula_images):
+    try:
+        payload = _dodari_resume_build_struct(
+            html_content, picture_delete, picture_skip,
+            code_block_images, wide_table_images, formula_images
+        )
+        path = _dodari_resume_struct_path(folder, index)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp_path = path + '.tmp'
+        with open(tmp_path, 'w', encoding='utf-8') as fp:
+            json.dump(payload, fp, ensure_ascii=False)
+            fp.flush()
+            os.fsync(fp.fileno())
+        os.replace(tmp_path, path)
+        return True
+    except Exception as err:
+        print('[Resume] PDF structure cache write failed ({i}): {e}'.format(i=index, e=err))
+        return False
+
+def _dodari_resume_load_struct(folder, index):
+    path = _dodari_resume_struct_path(folder, index)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as fp:
+            payload = json.load(fp)
+    except Exception:
+        return None
+    return _dodari_resume_restore_struct(payload)
+
+def _dodari_resume_split_chunks(items, size):
+    data = list(items)
+    if not data:
+        return []
+    try:
+        step = int(size)
+    except Exception:
+        step = 0
+    if step <= 0:
+        step = len(data)
+    return [data[i: i + step] for i in range(0, len(data), step)]
+
+def _dodari_resume_safe_index(items, index, fallback):
+    try:
+        if index < 0 or index >= len(items):
+            return fallback
+        return items[index]
+    except Exception:
+        return fallback
+
+def _dodari_resume_cleanup(folder):
+    try:
+        if os.path.exists(folder):
+            shutil.rmtree(folder, ignore_errors=True)
+    except Exception:
+        pass
+
+def _dodari_resume_is_resume_folder(name):
+    return bool(re.match(r'^temp_.+_[0-9a-f]{%d}_\d+$' % RESUME_HASH_LEN, str(name)))
+
+ENGINE_LOCAL = 'local'
+ENGINE_CLAUDE_CLI = 'claude-cli'
+ENGINE_CODEX_CLI = 'codex-cli'
+CLI_ENGINE_IDS = (ENGINE_CLAUDE_CLI, ENGINE_CODEX_CLI)
+
+CLI_BATCH_SIZE = 45
+CLI_WORKERS = 3
+
+CLI_STDIN_LIMIT_BYTES = 10 * 1024 * 1024
+
+CLI_TIMEOUT_SEC = 600
+
+CLI_MIN_VERSIONS = {
+    ENGINE_CLAUDE_CLI: (2, 0, 0),
+    ENGINE_CODEX_CLI: (0, 44, 0),
+}
+
+CLI_BINARIES = {
+    ENGINE_CLAUDE_CLI: 'claude',
+    ENGINE_CODEX_CLI: 'codex',
+}
+
+CLI_INSTALL_HINTS = {
+    ENGINE_CLAUDE_CLI: 'curl -fsSL https://claude.ai/install.sh | bash',
+    ENGINE_CODEX_CLI: 'npm install -g @openai/codex',
+}
+CLI_LOGIN_HINTS = {
+    ENGINE_CLAUDE_CLI: 'claude  (then run /login)',
+    ENGINE_CODEX_CLI: 'codex login',
+}
+
+CLI_RATE_LIMIT_PATTERNS = (
+    'usage limit',
+    'rate limit',
+    'rate_limit',
+    'quota exceeded',
+    'limit will reset',
+    'too many requests',
+    '429',
+)
+
+class DodariCliError(Exception):
+    pass
+
+class DodariCliRateLimitError(DodariCliError):
+    pass
+
+def _dodari_cli_is_engine(model):
+    return model in CLI_ENGINE_IDS
+
+def _dodari_cli_tuning():
+    return CLI_BATCH_SIZE, CLI_WORKERS
+
+def _dodari_cli_parse_version(raw):
+    if not raw:
+        return None
+    m = re.search(r'(\d+)\.(\d+)(?:\.(\d+))?', str(raw))
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+
+def _dodari_cli_version_at_least(found, minimum):
+    return tuple(found) >= tuple(minimum)
+
+def _dodari_cli_is_rate_limit(message):
+    if not message:
+        return False
+    low = str(message).lower()
+    return any(p in low for p in CLI_RATE_LIMIT_PATTERNS)
+
+def _dodari_cli_check_stdin_size(payload):
+    size = len(payload.encode('utf-8'))
+    if size > CLI_STDIN_LIMIT_BYTES:
+        raise DodariCliError(
+            f'CLI stdin limit exceeded: {size} bytes > {CLI_STDIN_LIMIT_BYTES}. '
+            'Reduce the batch size.'
+        )
+    return None
+
+def _dodari_cli_translation_schema():
+    return json.dumps({
+        'type': 'object',
+        'properties': {
+            'translations': {
+                'type': 'array',
+                'items': {'type': 'string'},
+            }
+        },
+        'required': ['translations'],
+        'additionalProperties': False,
+    }, ensure_ascii=False)
+
+def _dodari_cli_numbered_input(texts):
+    return '\n'.join(f'{i + 1}. {t}' for i, t in enumerate(texts))
+
+def _dodari_cli_normalize(items, expected_count, source):
+    if not isinstance(items, list):
+        raise DodariCliError(f'{source}: "translations" is not an array')
+    if len(items) != expected_count:
+        raise DodariCliError(
+            f'{source}: expected {expected_count} translations, got {len(items)}'
+        )
+    return [x if isinstance(x, str) else str(x) for x in items]
+
+def _dodari_cli_extract_array(obj, source):
+    if isinstance(obj, list):
+        return obj
+    if isinstance(obj, dict):
+        for key in ('translations', 'translation', 'result', 'results'):
+            if isinstance(obj.get(key), list):
+                return obj[key]
+    raise DodariCliError(f'{source}: no "translations" array in response')
+
+def _dodari_cli_strip_fence(text):
+    s = str(text).strip()
+    if s.startswith('```'):
+        s = re.sub(r'^```[a-zA-Z]*\s*', '', s)
+        s = re.sub(r'\s*```$', '', s)
+    return s.strip()
+
+def _dodari_cli_parse_claude(raw, expected_count):
+    if not raw or not str(raw).strip():
+        raise DodariCliError('claude CLI: empty output')
+    try:
+        data = json.loads(str(raw).strip())
+    except Exception as err:
+        raise DodariCliError(f'claude CLI: invalid JSON output ({err})')
+
+    if not isinstance(data, dict):
+        raise DodariCliError('claude CLI: unexpected output shape')
+
+    if data.get('is_error') or data.get('api_error_status'):
+        detail = data.get('result') or data.get('error') or ''
+        status = data.get('api_error_status')
+        message = f'claude CLI error (status={status}): {detail}'
+        if _dodari_cli_is_rate_limit(f'{status} {detail}'):
+            raise DodariCliRateLimitError(message)
+        raise DodariCliError(message)
+
+    payload = data.get('structured_output')
+    if payload is None:
+        result_text = data.get('result')
+        if not result_text:
+            raise DodariCliError('claude CLI: no structured_output and no result field')
+        try:
+            payload = json.loads(_dodari_cli_strip_fence(result_text))
+        except Exception as err:
+            raise DodariCliError(f'claude CLI: result field is not JSON ({err})')
+
+    items = _dodari_cli_extract_array(payload, 'claude CLI')
+    return _dodari_cli_normalize(items, expected_count, 'claude CLI')
+
+def _dodari_cli_parse_codex(raw, expected_count):
+    if not raw or not str(raw).strip():
+        raise DodariCliError('codex CLI: empty output')
+
+    last_message = None
+    for line in str(raw).splitlines():
+        line = line.strip()
+        if not line or not line.startswith('{'):
+            continue
+        try:
+            event = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(event, dict):
+            continue
+
+        etype = event.get('type')
+        if etype == 'turn.failed':
+            detail = (event.get('error') or {}).get('message', '')
+            message = f'codex CLI turn failed: {detail}'
+            if _dodari_cli_is_rate_limit(detail):
+                raise DodariCliRateLimitError(message)
+            raise DodariCliError(message)
+
+        item = event.get('item') or {}
+        if item.get('type') == 'agent_message' and item.get('text'):
+            last_message = item['text']
+
+    if last_message is None:
+        raise DodariCliError('codex CLI: no agent_message in event stream')
+
+    try:
+        payload = json.loads(_dodari_cli_strip_fence(last_message))
+    except Exception as err:
+        raise DodariCliError(f'codex CLI: agent_message is not JSON ({err})')
+
+    items = _dodari_cli_extract_array(payload, 'codex CLI')
+    return _dodari_cli_normalize(items, expected_count, 'codex CLI')
+
+def _dodari_cli_build_claude_cmd(system_prompt, schema_json):
+    return [
+        'claude', '-p',
+        '--output-format', 'json',
+        '--json-schema', schema_json,
+        '--tools', '',
+        '--disable-slash-commands',
+        '--strict-mcp-config',
+        '--settings', '{}',
+        '--system-prompt', system_prompt,
+    ]
+
+def _dodari_cli_build_codex_cmd(schema_path, instructions_path, model=None):
+    cmd = [
+        'codex', 'exec',
+        '--json',
+        '--output-schema', schema_path,
+        '--skip-git-repo-check',
+        '--ephemeral',
+        '--sandbox', 'read-only',
+        '-c', f'model_instructions_file={json.dumps(instructions_path)}',
+    ]
+    if model:
+        cmd += ['--model', model]
+    cmd.append('-')
+    return cmd
+
+def _dodari_cli_run_subprocess(cmd, stdin_payload, label):
+    try:
+        proc = subprocess.run(
+            cmd,
+            input=stdin_payload,
+            capture_output=True,
+            text=True,
+            timeout=CLI_TIMEOUT_SEC,
+        )
+    except subprocess.TimeoutExpired:
+        raise DodariCliError(f'{label}: timed out after {CLI_TIMEOUT_SEC}s')
+    except FileNotFoundError:
+        raise DodariCliError(f'{label}: command not found. Install it first.')
+    except Exception as err:
+        raise DodariCliError(f'{label}: subprocess failed ({err})')
+
+    stdout = getattr(proc, 'stdout', '') or ''
+    stderr = getattr(proc, 'stderr', '') or ''
+    if not stdout.strip() and stderr.strip():
+        if _dodari_cli_is_rate_limit(stderr):
+            raise DodariCliRateLimitError(f'{label}: {stderr.strip()[:300]}')
+        raise DodariCliError(f'{label}: no output. stderr={stderr.strip()[:300]}')
+    return stdout
+
+def _dodari_cli_run_claude(texts, system_prompt):
+    if not texts:
+        return []
+    stdin_payload = _dodari_cli_numbered_input(texts)
+    _dodari_cli_check_stdin_size(stdin_payload)
+    cmd = _dodari_cli_build_claude_cmd(system_prompt, _dodari_cli_translation_schema())
+    stdout = _dodari_cli_run_subprocess(cmd, stdin_payload, 'claude CLI')
+    return _dodari_cli_parse_claude(stdout, len(texts))
+
+def _dodari_cli_run_codex(texts, system_prompt, model=None):
+    if not texts:
+        return []
+    stdin_payload = _dodari_cli_numbered_input(texts)
+    _dodari_cli_check_stdin_size(stdin_payload)
+
+    schema_path = None
+    instructions_path = None
+    try:
+        fd, schema_path = tempfile.mkstemp(prefix='dodari_schema_', suffix='.json')
+        with os.fdopen(fd, 'w', encoding='utf-8') as fp:
+            fp.write(_dodari_cli_translation_schema())
+
+        fd, instructions_path = tempfile.mkstemp(prefix='dodari_instr_', suffix='.md')
+        with os.fdopen(fd, 'w', encoding='utf-8') as fp:
+            fp.write(system_prompt)
+
+        cmd = _dodari_cli_build_codex_cmd(schema_path, instructions_path, model)
+        stdout = _dodari_cli_run_subprocess(cmd, stdin_payload, 'codex CLI')
+        return _dodari_cli_parse_codex(stdout, len(texts))
+    except DodariCliError:
+        raise
+    except Exception as err:
+        raise DodariCliError(f'codex CLI: {err}')
+    finally:
+        for path in (schema_path, instructions_path):
+            if path:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+def _dodari_cli_ask(engine, prompt):
+    if engine == ENGINE_CODEX_CLI:
+        cmd = ['codex', 'exec', '--json', '--skip-git-repo-check',
+               '--ephemeral', '--sandbox', 'read-only', '-']
+        stdout = _dodari_cli_run_subprocess(cmd, prompt, 'codex CLI')
+        for line in reversed(stdout.splitlines()):
+            line = line.strip()
+            if not line.startswith('{'):
+                continue
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+            item = event.get('item') or {}
+            if item.get('type') == 'agent_message' and item.get('text'):
+                return str(item['text']).strip()
+        raise DodariCliError('codex CLI: no agent_message in event stream')
+
+    cmd = [
+        'claude', '-p',
+        '--output-format', 'json',
+        '--tools', '',
+        '--disable-slash-commands',
+        '--strict-mcp-config',
+        '--settings', '{}',
+    ]
+    stdout = _dodari_cli_run_subprocess(cmd, prompt, 'claude CLI')
+    try:
+        data = json.loads(stdout.strip())
+    except Exception as err:
+        raise DodariCliError(f'claude CLI: invalid JSON output ({err})')
+    if data.get('is_error') or data.get('api_error_status'):
+        detail = data.get('result') or ''
+        message = f'claude CLI error: {detail}'
+        if _dodari_cli_is_rate_limit(f'{data.get("api_error_status")} {detail}'):
+            raise DodariCliRateLimitError(message)
+        raise DodariCliError(message)
+    return str(data.get('result', '')).strip()
+
+def _dodari_cli_check_login(engine, binary):
+    login_hint = CLI_LOGIN_HINTS.get(engine, '')
+    if engine == ENGINE_CLAUDE_CLI:
+        try:
+            proc = subprocess.run(
+                _dodari_cli_build_claude_cmd(
+                    'Reply with the JSON {"translations":["ok"]} and nothing else.',
+                    _dodari_cli_translation_schema(),
+                ),
+                input='1. ok',
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except Exception as err:
+            return False, f'claude CLI login check failed: {err}'
+        try:
+            _dodari_cli_parse_claude(getattr(proc, 'stdout', '') or '', 1)
+        except DodariCliRateLimitError as err:
+            return False, str(err)
+        except DodariCliError as err:
+            return False, (
+                f'claude CLI is not logged in or unavailable: {err}\n'
+                f'  Log in with: {login_hint}'
+            )
+        return True, 'claude CLI ready'
+
+    try:
+        proc = subprocess.run(
+            [binary, 'login', 'status'], capture_output=True, text=True, timeout=60
+        )
+    except Exception as err:
+        return False, f'codex login status failed: {err}'
+
+    out = ((getattr(proc, 'stdout', '') or '') + (getattr(proc, 'stderr', '') or '')).lower()
+    if getattr(proc, 'returncode', 1) == 0 and 'not logged in' not in out:
+        return True, 'codex CLI ready'
+    return False, (
+        'codex CLI is not logged in.\n'
+        f'  Log in with: {login_hint}'
+    )
+
+def _dodari_cli_preflight(engine):
+    binary = CLI_BINARIES.get(engine)
+    if not binary:
+        return False, f'Unknown CLI engine: {engine}'
+
+    if not shutil.which(binary):
+        return False, (
+            f'{binary} CLI not found. Install it first:\n'
+            f'  {CLI_INSTALL_HINTS.get(engine, "")}'
+        )
+
+    try:
+        proc = subprocess.run(
+            [binary, '--version'], capture_output=True, text=True, timeout=30
+        )
+        version_raw = (getattr(proc, 'stdout', '') or '') + (getattr(proc, 'stderr', '') or '')
+    except Exception as err:
+        return False, f'{binary} --version failed: {err}'
+
+    found = _dodari_cli_parse_version(version_raw)
+    minimum = CLI_MIN_VERSIONS.get(engine, (0, 0, 0))
+    if found is None:
+        return False, f'Cannot read {binary} version from: {version_raw.strip()[:120]}'
+    if not _dodari_cli_version_at_least(found, minimum):
+        return False, (
+            f'{binary} {".".join(str(x) for x in found)} is too old '
+            f'(need {".".join(str(x) for x in minimum)}+). Update it and try again.'
+        )
+
+    return _dodari_cli_check_login(engine, binary)
 
 def _dodari_is_dialogue(text):
     if not text:
@@ -206,6 +837,9 @@ UI_TEXT = {
     'target_lang_label':'번역 목표 언어',
     'engine_ollama':'✔ Ollama 번역 엔진 활성화됨',
     'engine_gemma':'✔ Gemma 4 API 번역 사용 중',
+    'engine_cli':'✔ CLI 구독 번역 엔진 사용 중',
+    'cli_notice':'본인 계정·본인 구독 한도로 실행됩니다. CLI 직접 설치·로그인이 필요합니다.',
+    'err_cli_engine':'CLI 번역 엔진을 사용할 수 없습니다.',
     'model_label':"모델 선택 (E4B: 16GB 이하 초고속 추천 · 31B: 32GB 이상 고품질, 교체 시 서버 재시작 소요)",
     'bilingual_label':"이중언어 표기 방식 (학습용은 '원문(번역문)' 추천)",
     'genre_label':'장르 지정 (AI가 자동 추론)',
@@ -261,6 +895,9 @@ UI_TEXT = {
     'target_lang_label':'Target language',
     'engine_ollama':'✔ Ollama translation engine active',
     'engine_gemma':'✔ Gemma 4 API translation active',
+    'engine_cli':'✔ CLI subscription translation engine active',
+    'cli_notice':'Runs on your own account and your own subscription limits. You must install and log in to the CLI yourself.',
+    'err_cli_engine':'The CLI translation engine is unavailable.',
     'model_label':"Model selection (E4B: fast for ≤16GB · 31B: high quality for ≥32GB, server restart on change)",
     'bilingual_label':"Bilingual display mode (for learners: 'Original (Translation)' recommended)",
     'genre_label':'Genre (AI auto-inferred)',
@@ -316,6 +953,9 @@ UI_TEXT = {
     'target_lang_label':'翻訳先言語',
     'engine_ollama':'✔ Ollama翻訳エンジン有効',
     'engine_gemma':'✔ Gemma 4 API翻訳使用中',
+    'engine_cli':'✔ CLI サブスク翻訳エンジン使用中',
+    'cli_notice':'ご自身のアカウント・ご自身のサブスク上限で実行されます。CLIのインストールとログインはご自身で行う必要があります。',
+    'err_cli_engine':'CLI翻訳エンジンを利用できません。',
     'model_label':"モデル選択（E4B: 16GB以下高速・31B: 32GB以上高品質、切替時サーバー再起動）",
     'bilingual_label':"対訳表示方式（学習者向け：「原文（訳文）」推奨）",
     'genre_label':'ジャンル指定（AI自動推定）',
@@ -371,6 +1011,9 @@ UI_TEXT = {
     'target_lang_label':'目标语言',
     'engine_ollama':'✔ Ollama翻译引擎已激活',
     'engine_gemma':'✔ 正在使用Gemma 4 API翻译',
+    'engine_cli':'✔ 正在使用 CLI 订阅翻译引擎',
+    'cli_notice':'使用您自己的账号和您自己的订阅额度运行。需要您自行安装并登录 CLI。',
+    'err_cli_engine':'无法使用 CLI 翻译引擎。',
     'model_label':"模型选择（E4B：16GB以下高速·31B：32GB以上高质量，切换时重启服务器）",
     'bilingual_label':"双语显示方式（学习者推荐：'原文（译文）'）",
     'genre_label':'类型指定（AI自动推断）',
@@ -426,6 +1069,9 @@ UI_TEXT = {
     'target_lang_label':'Langue cible',
     'engine_ollama':'✔ Moteur de traduction Ollama actif',
     'engine_gemma':'✔ Traduction API Gemma 4 active',
+    'engine_cli':'✔ Moteur de traduction CLI par abonnement actif',
+    'cli_notice':"S'exécute avec votre propre compte et vos propres limites d'abonnement. Vous devez installer et vous connecter au CLI vous-même.",
+    'err_cli_engine':'Le moteur de traduction CLI est indisponible.',
     'model_label':"Sélection du modèle (E4B : rapide ≤16GB · 31B : haute qualité ≥32GB, redémarrage serveur au changement)",
     'bilingual_label':"Mode bilingue (pour apprenants : 'Original (Traduction)' recommandé)",
     'genre_label':'Genre (inféré automatiquement par IA)',
@@ -481,6 +1127,9 @@ UI_TEXT = {
     'target_lang_label':'Lingua di destinazione',
     'engine_ollama':'✔ Motore di traduzione Ollama attivo',
     'engine_gemma':'✔ Traduzione API Gemma 4 attiva',
+    'engine_cli':'✔ Motore di traduzione CLI in abbonamento attivo',
+    'cli_notice':"Viene eseguito con il tuo account e i limiti del tuo abbonamento. Devi installare ed effettuare l'accesso al CLI autonomamente.",
+    'err_cli_engine':'Il motore di traduzione CLI non è disponibile.',
     'model_label':"Selezione modello (E4B: veloce ≤16GB · 31B: alta qualità ≥32GB, riavvio server al cambio)",
     'bilingual_label':"Modalità bilingue (per studenti: 'Originale (Traduzione)' consigliato)",
     'genre_label':'Genere (inferito automaticamente dall\'IA)',
@@ -536,6 +1185,9 @@ UI_TEXT = {
     'target_lang_label':'Doeltaal',
     'engine_ollama':'✔ Ollama vertaalmachine actief',
     'engine_gemma':'✔ Gemma 4 API vertaling actief',
+    'engine_cli':'✔ CLI-abonnementsvertaalmachine actief',
+    'cli_notice':'Draait op je eigen account en je eigen abonnementslimieten. Je moet de CLI zelf installeren en inloggen.',
+    'err_cli_engine':'De CLI-vertaalmachine is niet beschikbaar.',
     'model_label':"Modelselectie (E4B: snel ≤16GB · 31B: hoge kwaliteit ≥32GB, server herstart bij wisseling)",
     'bilingual_label':"Tweetalige weergave (voor leerlingen: 'Origineel (Vertaling)' aanbevolen)",
     'genre_label':'Genre (automatisch afgeleid door AI)',
@@ -591,6 +1243,9 @@ UI_TEXT = {
     'target_lang_label':'Målsprog',
     'engine_ollama':'✔ Ollama oversættelsesmotor aktiv',
     'engine_gemma':'✔ Gemma 4 API oversættelse aktiv',
+    'engine_cli':'✔ CLI-abonnementsoversættelsesmotor aktiv',
+    'cli_notice':"Kører på din egen konto og dine egne abonnementsgrænser. Du skal selv installere og logge ind på CLI'en.",
+    'err_cli_engine':'CLI-oversættelsesmotoren er ikke tilgængelig.',
     'model_label':"Modelvalg (E4B: hurtig ≤16GB · 31B: høj kvalitet ≥32GB, servergenstart ved skift)",
     'bilingual_label':"Tosproget visningstilstand (for lærende: 'Original (Oversættelse)' anbefales)",
     'genre_label':'Genre (automatisk udledt af AI)',
@@ -646,6 +1301,9 @@ UI_TEXT = {
     'target_lang_label':'Målspråk',
     'engine_ollama':'✔ Ollama översättningsmotor aktiv',
     'engine_gemma':'✔ Gemma 4 API-översättning aktiv',
+    'engine_cli':'✔ CLI-prenumerationsöversättningsmotor aktiv',
+    'cli_notice':'Körs på ditt eget konto och dina egna prenumerationsgränser. Du måste själv installera och logga in på CLI:t.',
+    'err_cli_engine':'CLI-översättningsmotorn är inte tillgänglig.',
     'model_label':"Modellval (E4B: snabb ≤16GB · 31B: hög kvalitet ≥32GB, serveromstart vid byte)",
     'bilingual_label':"Tvåspråkigt visningsläge (för studerande: 'Original (Översättning)' rekommenderas)",
     'genre_label':'Genre (automatiskt härledd av AI)',
@@ -701,6 +1359,9 @@ UI_TEXT = {
     'target_lang_label':'Målspråk',
     'engine_ollama':'✔ Ollama oversettelsesmotor aktiv',
     'engine_gemma':'✔ Gemma 4 API-oversettelse aktiv',
+    'engine_cli':'✔ CLI-abonnementsoversettelsesmotor aktiv',
+    'cli_notice':'Kjører på din egen konto og dine egne abonnementsgrenser. Du må selv installere og logge inn på CLI-en.',
+    'err_cli_engine':'CLI-oversettelsesmotoren er ikke tilgjengelig.',
     'model_label':"Modellvalg (E4B: rask ≤16GB · 31B: høy kvalitet ≥32GB, serveromstart ved bytte)",
     'bilingual_label':"Tospråklig visningsmodus (for elever: 'Original (Oversettelse)' anbefales)",
     'genre_label':'Sjanger (automatisk utledet av AI)',
@@ -756,6 +1417,9 @@ UI_TEXT = {
     'target_lang_label':'لغة الهدف',
     'engine_ollama':'✔ محرك ترجمة Ollama نشط',
     'engine_gemma':'✔ ترجمة Gemma 4 API نشطة',
+    'engine_cli':'✔ محرك ترجمة CLI بالاشتراك نشط',
+    'cli_notice':'يعمل بحسابك الخاص وبحدود اشتراكك الخاص. عليك تثبيت واجهة CLI وتسجيل الدخول إليها بنفسك.',
+    'err_cli_engine':'محرك ترجمة CLI غير متاح.',
     'model_label':"اختيار النموذج (E4B: سريع ≤16GB · 31B: جودة عالية ≥32GB، إعادة تشغيل الخادم عند التبديل)",
     'bilingual_label':"وضع العرض ثنائي اللغة (للمتعلمين: يُنصح بـ 'الأصل (الترجمة)')",
     'genre_label':'النوع الأدبي (يُستنتج تلقائياً بالذكاء الاصطناعي)',
@@ -811,6 +1475,9 @@ UI_TEXT = {
     'target_lang_label':'زبان مقصد',
     'engine_ollama':'✔ موتور ترجمه Ollama فعال است',
     'engine_gemma':'✔ ترجمه Gemma 4 API فعال است',
+    'engine_cli':'✔ موتور ترجمه اشتراکی CLI فعال است',
+    'cli_notice':'با حساب کاربری خودتان و سقف اشتراک خودتان اجرا می‌شود. باید خودتان CLI را نصب کرده و وارد شوید.',
+    'err_cli_engine':'موتور ترجمه CLI در دسترس نیست.',
     'model_label':"انتخاب مدل (E4B: سریع ≤16GB · 31B: کیفیت بالا ≥32GB، راه‌اندازی مجدد سرور هنگام تغییر)",
     'bilingual_label':"حالت نمایش دوزبانه (برای زبان‌آموزان: 'متن اصلی (ترجمه)' توصیه می‌شود)",
     'genre_label':'ژانر (استنتاج خودکار توسط هوش مصنوعی)',
@@ -870,22 +1537,41 @@ def detect_ui_language() -> str:
         return 'en'
 
 
-def load_ui_config() -> str:
+def _read_ui_config() -> dict:
     try:
         with open(_UI_CONFIG_PATH, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        lang = data.get('ui_lang', '')
-        return lang if lang in _UI_LANG_CODES else ''
+        return data if isinstance(data, dict) else {}
     except Exception:
-        return ''
+        return {}
+
+
+def _write_ui_config(updates: dict):
+    data = _read_ui_config()
+    data.update(updates)
+    try:
+        with open(_UI_CONFIG_PATH, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception as e:
+        print(f'[ui_config] Save failed: {e}')
+
+
+def load_ui_config() -> str:
+    lang = _read_ui_config().get('ui_lang', '')
+    return lang if lang in _UI_LANG_CODES else ''
 
 
 def save_ui_config(lang_code: str):
-    try:
-        with open(_UI_CONFIG_PATH, 'w', encoding='utf-8') as f:
-            json.dump({'ui_lang': lang_code}, f)
-    except Exception as e:
-        print(f'[ui_config] Save failed: {e}')
+    _write_ui_config({'ui_lang': lang_code})
+
+
+def load_engine_config() -> str:
+    engine = _read_ui_config().get('engine', '')
+    return engine if engine in CLI_ENGINE_IDS else ENGINE_LOCAL
+
+
+def save_engine_config(engine: str):
+    _write_ui_config({'engine': engine})
 
 
 EPUB_TRANSLATE_TAGS = {'div', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'span', 'td', 'th', 'blockquote'}
@@ -901,13 +1587,11 @@ class Dodari:
         self.max_len = 512
         if platform.system() == 'Linux':
             self.translate_batch_size = 8
-            self.translate_workers = 16
         elif platform.system() == 'Windows':
             self.translate_batch_size = 5
-            self.translate_workers = 1
         else:
             self.translate_batch_size = 15
-            self.translate_workers = 4
+        self.translate_workers = self._default_translate_workers()
         self.kv_bits = 8
         self.temperature = 1
         self.launch_time = None
@@ -949,9 +1633,31 @@ class Dodari:
         _saved = load_ui_config()
         self.ui_lang = _saved if _saved else detect_ui_language()
 
+        _engine = load_engine_config()
+        if _dodari_cli_is_engine(_engine):
+            self.gemma_model = _engine
+            self.translate_batch_size, self.translate_workers = _dodari_cli_tuning()
+        self.cli_preflight_done = False
+
+    def _default_translate_workers(self) -> int:
+        if platform.system() == 'Linux':
+            return 16
+        if platform.system() == 'Windows':
+            return 1
+        return 4
+
     def _T(self, key: str) -> str:
         lang_dict = UI_TEXT.get(self.ui_lang, UI_TEXT['en'])
         return lang_dict.get(key, UI_TEXT['en'].get(key, key))
+
+    def _engine_label(self, lang_code: str = None) -> str:
+        if lang_code:
+            T = lambda k: UI_TEXT.get(lang_code, UI_TEXT['en']).get(k, UI_TEXT['en'].get(k, k))
+        else:
+            T = self._T
+        if _dodari_cli_is_engine(self.gemma_model):
+            return T('engine_cli')
+        return T('engine_ollama') if platform.system() == 'Windows' else T('engine_gemma')
 
     def _genre_choices(self):
         return [(self._T(f'genre_{i}'), GENRE_CHOICES_KO[i]) for i in range(len(GENRE_CHOICES_KO))]
@@ -967,8 +1673,17 @@ class Dodari:
         return [(disp[ko], ko) for ko in SUPPORTED_LANGUAGES]
 
     def launch_interface(self):
-        self.remove_folder(self.temp_folder_1)
-        self.remove_folder(self.temp_folder_2)
+        self.remove_folder('temp_1')
+        self.remove_folder('temp_2')
+
+        try:
+            _pending = [d for d in os.listdir('.')
+                        if os.path.isdir(d) and _dodari_resume_is_resume_folder(d)]
+            if _pending:
+                print(f'[Resume] {len(_pending)} unfinished translation folder(s) found: {", ".join(sorted(_pending)[:5])}')
+                print('[Resume] Re-upload the same file with the same settings to continue.')
+        except Exception:
+            pass
 
         def _title_html(lc):
             T = lambda k: UI_TEXT.get(lc, UI_TEXT['en']).get(k, UI_TEXT['en'].get(k, k))
@@ -1012,11 +1727,7 @@ class Dodari:
                             value='한국어',
                             label=self._T('target_lang_label')
                         )
-                        if platform.system() == 'Windows':
-                            _engine_label = self._T('engine_ollama')
-                        else:
-                            _engine_label = self._T('engine_gemma')
-                        engine_html = gr.HTML(f"<p style='color:green;'>{_engine_label}</p>")
+                        engine_html = gr.HTML(f"<p style='color:green;'>{self._engine_label()}</p>")
 
                         if platform.system() == 'Windows':
                             _model_choices = ["gemma4:e4b", "gemma4:31b"]
@@ -1030,10 +1741,22 @@ class Dodari:
                                 "mlx-community/gemma-4-31b-it-4bit",
                             ]
                             _model_default = "mlx-community/gemma-4-31b-it-4bit"
+
+                        if self.platform != 'Linux':
+                            _model_choices = _model_choices + [
+                                ('Claude (subscription CLI)', ENGINE_CLAUDE_CLI),
+                                ('ChatGPT (subscription CLI)', ENGINE_CODEX_CLI),
+                            ]
+                        if _dodari_cli_is_engine(self.gemma_model):
+                            _model_default = self.gemma_model
+
                         self.model_radio = gr.Radio(
                             choices=_model_choices,
                             label=self._T('model_label'),
                             value=_model_default
+                        )
+                        cli_notice_md = gr.Markdown(
+                            f"<p style='color:#888;font-size:0.85em;'>{self._T('cli_notice')}</p>"
                         )
                 with gr.Column(scale=1, min_width=300):
                     with gr.Tab(self._T('step3')) as tab3:
@@ -1174,20 +1897,25 @@ class Dodari:
                                 f'Select at most 25 terms. Ignore common English words.\n\nWord list: {candidate_list_str}'
                             )
                             try:
-                                payload = {
-                                    'model': self.gemma_model,
-                                    'messages': [{'role': 'user', 'content': extraction_prompt}],
-                                    'max_tokens': 512,
-                                    'temperature': 0.3,
-                                }
-                                response = requests.post(
-                                    self.gemma_api_url,
-                                    headers={'Content-Type': 'application/json'},
-                                    json=payload,
-                                    timeout=60
-                                )
-                                response.raise_for_status()
-                                ai_result = response.json()['choices'][0]['message']['content'].strip()
+                                if _dodari_cli_is_engine(self.gemma_model):
+                                    ai_result = _dodari_cli_strip_fence(
+                                        _dodari_cli_ask(self.gemma_model, extraction_prompt)
+                                    )
+                                else:
+                                    payload = {
+                                        'model': self.gemma_model,
+                                        'messages': [{'role': 'user', 'content': extraction_prompt}],
+                                        'max_tokens': 512,
+                                        'temperature': 0.3,
+                                    }
+                                    response = requests.post(
+                                        self.gemma_api_url,
+                                        headers={'Content-Type': 'application/json'},
+                                        json=payload,
+                                        timeout=60
+                                    )
+                                    response.raise_for_status()
+                                    ai_result = response.json()['choices'][0]['message']['content'].strip()
 
                                 lines = [l.strip() for l in ai_result.splitlines() if ':' in l and l.strip()]
                                 valid_lines = [l for l in lines if len(l.split(':', 1)) == 2]
@@ -1259,7 +1987,7 @@ class Dodari:
                 save_ui_config(lang_code)
                 self.ui_lang = lang_code
                 T = lambda k: UI_TEXT.get(lang_code, UI_TEXT['en']).get(k, UI_TEXT['en'].get(k, k))
-                _eng = T('engine_ollama') if platform.system() == 'Windows' else T('engine_gemma')
+                _eng = self._engine_label(lang_code)
                 return (
                     gr.update(value=_title_html(lang_code)),
                     gr.update(label=T('step1')),
@@ -1271,6 +1999,7 @@ class Dodari:
                     gr.update(label=T('target_lang_label'), choices=self._lang_choices()),
                     gr.update(value=f"<p style='color:green;'>{_eng}</p>"),
                     gr.update(label=T('model_label')),
+                    gr.update(value=f"<p style='color:#888;font-size:0.85em;'>{T('cli_notice')}</p>"),
                     gr.update(label=T('step3')),
                     gr.update(label=T('bilingual_label'), choices=self._bilingual_choices()),
                     gr.update(label=T('genre_label'), choices=self._genre_choices()),
@@ -1291,7 +2020,7 @@ class Dodari:
             _live_outputs = [
                 title_html, tab1, step1_html, input_window, file_limit_md,
                 self.origin_lang_display, tab2, self.target_lang_radio, engine_html,
-                self.model_radio, tab3, self.bilingual_order_radio, self.genre_radio,
+                self.model_radio, cli_notice_md, tab3, self.bilingual_order_radio, self.genre_radio,
                 self.tone_radio, glossary_accordion, glossary_extract_btn,
                 self.glossary_textbox, glossary_apply_btn, glossary_clear_btn,
                 self.glossary_count_md, glossary_desc_md, tab4, translate_btn,
@@ -1323,6 +2052,26 @@ class Dodari:
     def reload_llm_server(self, new_model: str):
         if self.gemma_model == new_model:
             return
+
+        if _dodari_cli_is_engine(new_model):
+            self.gemma_model = new_model
+            self.translate_batch_size, self.translate_workers = _dodari_cli_tuning()
+            save_engine_config(new_model)
+            print(f"\n[Engine Switch] CLI engine selected: {new_model}")
+            print(f"[Engine Switch] batch={self.translate_batch_size}, workers={self.translate_workers}")
+            ok, detail = _dodari_cli_preflight(new_model)
+            self.cli_preflight_done = ok
+            print(f'[Engine Switch] preflight: {detail}')
+            if ok:
+                gr.Info(f'{new_model} ready. Runs on your own account and subscription limits.')
+            else:
+                gr.Warning(detail)
+            return
+
+        if _dodari_cli_is_engine(self.gemma_model):
+            save_engine_config(ENGINE_LOCAL)
+            self.cli_preflight_done = False
+            self.translate_workers = self._default_translate_workers()
 
         print(f"\n[Model Switch] Loading {new_model} server...")
         gr.Info(f"Switching model to {new_model}. Please wait.")
@@ -1430,32 +2179,43 @@ class Dodari:
         print("Start! now.." + str(self.start))
         progress(0, desc=self._T('progress_init'))
 
-        _base_url = self.gemma_api_url.rsplit('/v1/', 1)[0]
-        progress(0, desc=self._T('progress_server'))
-        server_ok = False
-        for attempt in range(5):
-            try:
-                resp = requests.get(f'{_base_url}/v1/models', timeout=3)
-                if resp.status_code == 200:
-                    server_ok = True
-                    break
-            except Exception:
-                pass
-            print(f'[Server] {_base_url} not responding ({attempt + 1}/5), retrying in 2s...')
-            time.sleep(2)
+        if _dodari_cli_is_engine(self.gemma_model):
+            progress(0, desc=self._T('progress_server'))
+            if not self.cli_preflight_done:
+                ok, detail = _dodari_cli_preflight(self.gemma_model)
+                print(f'[CLI Engine] {self.gemma_model} preflight: {detail}')
+                if not ok:
+                    _safe = detail.replace('<', '&lt;').replace('>', '&gt;').replace('\n', '<br>')
+                    return None, f"<p style='color:red;'>{self._T('err_cli_engine')}<br>{_safe}</p>"
+                self.cli_preflight_done = True
+            print(f'CLI engine ready for translation: {self.gemma_model}')
+        else:
+            _base_url = self.gemma_api_url.rsplit('/v1/', 1)[0]
+            progress(0, desc=self._T('progress_server'))
+            server_ok = False
+            for attempt in range(5):
+                try:
+                    resp = requests.get(f'{_base_url}/v1/models', timeout=3)
+                    if resp.status_code == 200:
+                        server_ok = True
+                        break
+                except Exception:
+                    pass
+                print(f'[Server] {_base_url} not responding ({attempt + 1}/5), retrying in 2s...')
+                time.sleep(2)
 
-        if not server_ok:
-            _guide_key = {
-                'Darwin': 'server_guide_mac',
-                'Windows': 'server_guide_windows',
-                'Linux': 'server_guide_linux',
-            }.get(platform.system(), 'server_guide_default')
-            _guide = self._T(_guide_key)
-            return (
-                None,
-                f"<p style='color:red;'>{self._T('err_server').format(url=_base_url, guide=_guide)}</p>"
-            )
-        print('Gemma API ready for translation')
+            if not server_ok:
+                _guide_key = {
+                    'Darwin': 'server_guide_mac',
+                    'Windows': 'server_guide_windows',
+                    'Linux': 'server_guide_linux',
+                }.get(platform.system(), 'server_guide_default')
+                _guide = self._T(_guide_key)
+                return (
+                    None,
+                    f"<p style='color:red;'>{self._T('err_server').format(url=_base_url, guide=_guide)}</p>"
+                )
+            print('Gemma API ready for translation')
 
         if not self.origin_lang:
             return None, f"<p style='color:red;'>{self._T('err_lang_detect')}</p>"
@@ -1476,9 +2236,35 @@ class Dodari:
             print(f'file: {file}')
             name, ext = os.path.splitext(file['orig_name'])
 
+            resume_settings = {
+                'model': self.gemma_model,
+                'target_lang': target_abb,
+                'genre': genre_val,
+                'tone': tone_val,
+                'bilingual_order': bilingual_order_val,
+            }
+            resume_base = _dodari_resume_temp_basename(file['orig_name'], resume_settings)
+            self.temp_folder_1 = _dodari_resume_temp_folder(resume_base, 1)
+            self.temp_folder_2 = _dodari_resume_temp_folder(resume_base, 2)
+
             if 'epub' in ext:
-                self.extract_epub_contents(self.temp_folder_1, file['path'])
-                self.extract_epub_contents(self.temp_folder_2, file['path'])
+                resume_mode = (
+                    _dodari_resume_should_resume(self.temp_folder_1, resume_settings)
+                    and _dodari_resume_should_resume(self.temp_folder_2, resume_settings)
+                )
+                resume_done = _dodari_resume_load_snapshot(self.temp_folder_1, resume_settings)['done']
+
+                if resume_mode:
+                    print(f'[Resume] Existing progress found for "{file["orig_name"]}"')
+                    print(f'[Resume] {len(resume_done)} chapter(s) already translated, continuing without re-extracting')
+                else:
+                    self.remove_folder(self.temp_folder_1)
+                    self.remove_folder(self.temp_folder_2)
+                    resume_done = []
+                    self.extract_epub_contents(self.temp_folder_1, file['path'])
+                    self.extract_epub_contents(self.temp_folder_2, file['path'])
+                    _dodari_resume_save_snapshot(self.temp_folder_1, file['orig_name'], resume_settings, [])
+                    _dodari_resume_save_snapshot(self.temp_folder_2, file['orig_name'], resume_settings, [])
 
                 opf_file = self.locate_epub_metadata_opf()
                 tree = parse(opf_file)
@@ -1497,9 +2283,14 @@ class Dodari:
 
                 file_path = self.list_epub_html_files()
                 print('File count: ', len(file_path))
+                chapter_failed = False
                 for html_file in progress.tqdm(file_path, desc='Chapter'):
                     print('html_file')
                     print(html_file)
+                    unit_key = _dodari_resume_unit_key(self.temp_folder_1, html_file)
+                    if _dodari_resume_is_done(resume_done, unit_key):
+                        print(f'[Resume] Skipping already translated chapter: {unit_key}')
+                        continue
                     try:
                         html_file_2 = html_file.replace(self.temp_folder_1, self.temp_folder_2)
 
@@ -1512,6 +2303,10 @@ class Dodari:
                         _skip_epub_types = {'index', 'toc', 'cover', 'lot', 'loi'}
                         _body_tag = soup_1.find('body')
                         if _body_tag and _skip_epub_types.intersection((_body_tag.get('epub:type') or '').split()):
+                            input_file_1.close()
+                            input_file_2.close()
+                            _dodari_resume_mark_done(self.temp_folder_1, file['orig_name'], resume_settings, resume_done, unit_key)
+                            _dodari_resume_save_snapshot(self.temp_folder_2, file['orig_name'], resume_settings, resume_done)
                             continue
 
                         _leaf_filter = EPUB_TRANSLATE_TAGS - {'span'}
@@ -1546,7 +2341,11 @@ class Dodari:
                             particle.append(0)
                             whole_particle.extend(particle)
 
-                        parti_1, parti_2 = self.batch_translate_engine(only_texts, whole_particle, 'epub', genre_val, tone_val, bilingual_order_val)
+                        parti_1, parti_2 = self.resumable_translate(
+                            only_texts, whole_particle, 'epub', genre_val, tone_val, bilingual_order_val,
+                            self.temp_folder_1, file['orig_name'], resume_settings, resume_done,
+                            progress, key_prefix=f'{unit_key}:'
+                        )
 
                         particle_list_1 = []
                         particle_list_2 = []
@@ -1598,12 +2397,27 @@ class Dodari:
                         output_file_2 = open(html_file_2, 'w', encoding='utf-8')
                         output_file_1.write(str(soup_1))
                         output_file_2.write(str(soup_2))
+                        output_file_1.flush()
+                        output_file_2.flush()
+                        os.fsync(output_file_1.fileno())
+                        os.fsync(output_file_2.fileno())
                         output_file_1.close()
                         output_file_2.close()
+                    except DodariCliError as err:
+                        print(f'[CLI Engine] Translation stopped: {err}')
+                        print('[Resume] Progress is preserved, rerun to continue.')
+                        chapter_failed = True
+                        break
                     except Exception as err:
                         print(err)
                         print('HTML loading error, skipping')
                         continue
+
+                    _dodari_resume_mark_done(self.temp_folder_1, file['orig_name'], resume_settings, resume_done, unit_key)
+                    _dodari_resume_save_snapshot(self.temp_folder_2, file['orig_name'], resume_settings, resume_done)
+
+                if chapter_failed:
+                    continue
 
                 for loc_folder in [self.temp_folder_1, self.temp_folder_2]:
                     self.repack_epub_contents(loc_folder, f'{loc_folder}.epub')
@@ -1620,8 +2434,8 @@ class Dodari:
                 shutil.move(f'{self.temp_folder_1}.epub', done_path_1)
                 shutil.move(f'{self.temp_folder_2}.epub', done_path_2)
 
-                self.remove_folder(self.temp_folder_1)
-                self.remove_folder(self.temp_folder_2)
+                _dodari_resume_cleanup(self.temp_folder_1)
+                _dodari_resume_cleanup(self.temp_folder_2)
 
             elif '.pdf' in ext:
                 print(f'[PDF Translation] Start: {name}{ext}')
@@ -1633,163 +2447,232 @@ class Dodari:
 
                 try:
                     os.makedirs(self.output_folder, exist_ok=True)
-                    progress(0, desc='[PDF] Structuring HTML with Docling...')
 
-                    print(f"\n[PDF] Processing: {file['path']} - Docling mode")
-                    progress(0, desc='[PDF] Loading Docling engine...')
-
-                    pipeline_options = PdfPipelineOptions()
-                    pipeline_options.generate_picture_images = True
-                    pipeline_options.images_scale = 2.0
-                    if sys.platform == 'darwin':
-                        pipeline_options.accelerator_options = AcceleratorOptions(
-                            num_threads=8,
-                            device=AcceleratorDevice.AUTO
-                        )
+                    if _dodari_resume_should_resume(self.temp_folder_1, resume_settings):
+                        resume_done = _dodari_resume_load_snapshot(self.temp_folder_1, resume_settings)['done']
+                        print(f'[Resume] Existing progress found for "{file["orig_name"]}"')
+                        print(f'[Resume] {len(resume_done)} translation chunk(s) already done')
                     else:
-                        pipeline_options.accelerator_options = AcceleratorOptions(
-                            num_threads=4,
-                            device=AcceleratorDevice.CPU
+                        self.remove_folder(self.temp_folder_1)
+                        resume_done = []
+                        _dodari_resume_save_snapshot(self.temp_folder_1, file['orig_name'], resume_settings, [])
+
+                    _struct_cached = _dodari_resume_load_struct(self.temp_folder_1, 0)
+                    if _struct_cached is not None:
+                        html_content      = _struct_cached['html']
+                        picture_delete    = _struct_cached['picture_delete']
+                        picture_skip      = _struct_cached['picture_skip']
+                        code_block_images = _struct_cached['code_block_images']
+                        wide_table_images = _struct_cached['wide_table_images']
+                        formula_images    = _struct_cached['formula_images']
+                        print(f'[Resume] PDF structure loaded from cache '
+                              f'(HTML {len(html_content):,} chars, code {len(code_block_images)}, '
+                              f'table {len(wide_table_images)}, formula {len(formula_images)})')
+
+                    if _struct_cached is None:
+                        progress(0, desc='[PDF] Structuring HTML with Docling...')
+
+                        print(f"\n[PDF] Processing: {file['path']} - Docling mode")
+                        progress(0, desc='[PDF] Loading Docling engine...')
+
+                        pipeline_options = PdfPipelineOptions()
+                        pipeline_options.generate_picture_images = True
+                        pipeline_options.images_scale = 2.0
+                        if sys.platform == 'darwin':
+                            pipeline_options.accelerator_options = AcceleratorOptions(
+                                num_threads=8,
+                                device=AcceleratorDevice.AUTO
+                            )
+                        else:
+                            pipeline_options.accelerator_options = AcceleratorOptions(
+                                num_threads=4,
+                                device=AcceleratorDevice.CPU
+                            )
+
+                        print("[PDF] Initializing DocumentConverter...")
+                        converter = DocumentConverter(
+                            format_options={'pdf': PdfFormatOption(pipeline_options=pipeline_options)}
                         )
 
-                    print("[PDF] Initializing DocumentConverter...")
-                    converter = DocumentConverter(
-                        format_options={'pdf': PdfFormatOption(pipeline_options=pipeline_options)}
-                    )
+                        print("[PDF] Starting HTML structure extraction (may take 1-3 min depending on PDF size)...")
+                        progress(5, desc='[PDF] Extracting HTML structure...')
+                        result = converter.convert(file['path'])
+                        print("[PDF] Structure extraction complete!")
 
-                    print("[PDF] Starting HTML structure extraction (may take 1-3 min depending on PDF size)...")
-                    progress(5, desc='[PDF] Extracting HTML structure...')
-                    result = converter.convert(file['path'])
-                    print("[PDF] Structure extraction complete!")
+                        picture_delete = set()
+                        picture_skip = set()
+                        try:
+                            picture_regions = []
+                            for pic in getattr(result.document, 'pictures', []):
+                                for prov in getattr(pic, 'prov', []):
+                                    bbox = getattr(prov, 'bbox', None)
+                                    if bbox is not None:
+                                        picture_regions.append((prov.page_no, bbox))
 
-                    picture_delete = set()
-                    picture_skip = set()
-                    try:
-                        picture_regions = []
-                        for pic in getattr(result.document, 'pictures', []):
-                            for prov in getattr(pic, 'prov', []):
-                                bbox = getattr(prov, 'bbox', None)
-                                if bbox is not None:
-                                    picture_regions.append((prov.page_no, bbox))
+                            if picture_regions:
+                                margin_up    = 150
+                                margin_down  = 15
+                                margin_horiz = 150
+                                for entry in result.document.iterate_items():
+                                    item = entry[0] if isinstance(entry, (tuple, list)) else entry
+                                    item_text = getattr(item, 'text', None)
+                                    if not item_text or not item_text.strip():
+                                        continue
+                                    for tprov in getattr(item, 'prov', []):
+                                        bbox = getattr(tprov, 'bbox', None)
+                                        if bbox is None:
+                                            continue
+                                        tb = bbox
+                                        for (pp, pb) in picture_regions:
+                                            if tprov.page_no != pp:
+                                                continue
+                                            horiz_ok = (tb.l >= pb.l - margin_horiz and
+                                                        tb.r <= pb.r + margin_horiz)
+                                            if not horiz_ok:
+                                                break
+                                            if tb.t >= pb.b and tb.t <= pb.t + margin_up:
+                                                picture_delete.add(item_text.strip())
+                                            elif pb.b - margin_down <= tb.t < pb.b:
+                                                picture_skip.add(item_text.strip())
+                                            break
 
-                        if picture_regions:
-                            margin_up    = 150
-                            margin_down  = 15
-                            margin_horiz = 150
+                            print(f'[PDF] Delete text: {len(picture_delete)} / Skip text: {len(picture_skip)}')
+                        except Exception as pe:
+                            import traceback as _tb
+                            print(f'[PDF] Image text collection error: {pe}')
+                            _tb.print_exc()
+
+                        code_block_images = []
+                        try:
+                            import io as _io
+                            import base64 as _b64
+                            import pypdfium2 as _pdfium
+
+                            pdf_doc = _pdfium.PdfDocument(file['path'])
+                            rendered_pages = {}
+
                             for entry in result.document.iterate_items():
                                 item = entry[0] if isinstance(entry, (tuple, list)) else entry
-                                item_text = getattr(item, 'text', None)
-                                if not item_text or not item_text.strip():
+                                item_label = str(getattr(item, 'label', '')).upper()
+                                if 'CODE' not in item_label:
                                     continue
-                                for tprov in getattr(item, 'prov', []):
-                                    bbox = getattr(tprov, 'bbox', None)
-                                    if bbox is None:
-                                        continue
-                                    tb = bbox
-                                    for (pp, pb) in picture_regions:
-                                        if tprov.page_no != pp:
-                                            continue
-                                        horiz_ok = (tb.l >= pb.l - margin_horiz and
-                                                    tb.r <= pb.r + margin_horiz)
-                                        if not horiz_ok:
-                                            break
-                                        if tb.t >= pb.b and tb.t <= pb.t + margin_up:
-                                            picture_delete.add(item_text.strip())
-                                        elif pb.b - margin_down <= tb.t < pb.b:
-                                            picture_skip.add(item_text.strip())
-                                        break
-
-                        print(f'[PDF] Delete text: {len(picture_delete)} / Skip text: {len(picture_skip)}')
-                    except Exception as pe:
-                        import traceback as _tb
-                        print(f'[PDF] Image text collection error: {pe}')
-                        _tb.print_exc()
-
-                    code_block_images = []
-                    try:
-                        import io as _io
-                        import base64 as _b64
-                        import pypdfium2 as _pdfium
-
-                        pdf_doc = _pdfium.PdfDocument(file['path'])
-                        rendered_pages = {}
-
-                        for entry in result.document.iterate_items():
-                            item = entry[0] if isinstance(entry, (tuple, list)) else entry
-                            item_label = str(getattr(item, 'label', '')).upper()
-                            if 'CODE' not in item_label:
-                                continue
-                            for prov in getattr(item, 'prov', []):
-                                bbox = getattr(prov, 'bbox', None)
-                                if bbox is None:
-                                    continue
-                                page_no = prov.page_no
-                                if page_no not in rendered_pages:
-                                    pdf_page = pdf_doc[page_no - 1]
-                                    pt_w = pdf_page.get_width()
-                                    pt_h = pdf_page.get_height()
-                                    bitmap = pdf_page.render(scale=2.0)
-                                    pil_img = bitmap.to_pil()
-                                    rendered_pages[page_no] = (pil_img, pt_w, pt_h)
-                                pil_img, pt_w, pt_h = rendered_pages[page_no]
-                                img_w, img_h = pil_img.size
-                                sx = img_w / pt_w
-                                sy = img_h / pt_h
-                                pad = 10
-                                x1 = max(0, int(bbox.l * sx) - pad)
-                                y1 = max(0, int((pt_h - bbox.t) * sy) - pad)
-                                x2 = min(img_w, int(bbox.r * sx) + pad)
-                                y2 = min(img_h, int((pt_h - bbox.b) * sy) + pad)
-                                cropped = pil_img.crop((x1, y1, x2, y2))
-                                buf = _io.BytesIO()
-                                cropped.save(buf, format='PNG')
-                                b64str = _b64.b64encode(buf.getvalue()).decode('utf-8')
-                                code_block_images.append(f'data:image/png;base64,{b64str}')
-                                break
-
-                        pdf_doc.close()
-                        print(f'[PDF] {len(code_block_images)} code block image(s) cropped')
-                    except Exception as ce:
-                        import traceback as _tb
-                        print(f'[PDF] Code block image conversion error: {ce}')
-                        _tb.print_exc()
-
-                    WIDE_TABLE_COL_THRESHOLD = 5
-                    wide_table_images = {}
-
-                    try:
-                        pdf_doc_t = _pdfium.PdfDocument(file['path'])
-                        rendered_pages_t = {}
-                        table_idx = 0
-
-                        for entry in result.document.iterate_items():
-                            item = entry[0] if isinstance(entry, (tuple, list)) else entry
-                            item_label = str(getattr(item, 'label', '')).upper()
-                            if 'TABLE' not in item_label:
-                                continue
-
-                            col_count = 0
-                            table_data = getattr(item, 'data', None)
-                            if table_data is not None:
-                                col_count = getattr(table_data, 'num_cols', 0)
-                                if col_count == 0 and hasattr(table_data, 'grid') and table_data.grid:
-                                    col_count = len(table_data.grid[0]) if table_data.grid[0] else 0
-
-                            if col_count >= WIDE_TABLE_COL_THRESHOLD:
                                 for prov in getattr(item, 'prov', []):
                                     bbox = getattr(prov, 'bbox', None)
                                     if bbox is None:
                                         continue
                                     page_no = prov.page_no
-                                    if page_no not in rendered_pages_t:
-                                        pdf_page = pdf_doc_t[page_no - 1]
+                                    if page_no not in rendered_pages:
+                                        pdf_page = pdf_doc[page_no - 1]
                                         pt_w = pdf_page.get_width()
                                         pt_h = pdf_page.get_height()
                                         bitmap = pdf_page.render(scale=2.0)
                                         pil_img = bitmap.to_pil()
-                                        rendered_pages_t[page_no] = (pil_img, pt_w, pt_h)
+                                        rendered_pages[page_no] = (pil_img, pt_w, pt_h)
+                                    pil_img, pt_w, pt_h = rendered_pages[page_no]
+                                    img_w, img_h = pil_img.size
+                                    sx = img_w / pt_w
+                                    sy = img_h / pt_h
+                                    pad = 10
+                                    x1 = max(0, int(bbox.l * sx) - pad)
+                                    y1 = max(0, int((pt_h - bbox.t) * sy) - pad)
+                                    x2 = min(img_w, int(bbox.r * sx) + pad)
+                                    y2 = min(img_h, int((pt_h - bbox.b) * sy) + pad)
+                                    cropped = pil_img.crop((x1, y1, x2, y2))
+                                    buf = _io.BytesIO()
+                                    cropped.save(buf, format='PNG')
+                                    b64str = _b64.b64encode(buf.getvalue()).decode('utf-8')
+                                    code_block_images.append(f'data:image/png;base64,{b64str}')
+                                    break
 
-                                    pil_img, pt_w, pt_h = rendered_pages_t[page_no]
+                            pdf_doc.close()
+                            print(f'[PDF] {len(code_block_images)} code block image(s) cropped')
+                        except Exception as ce:
+                            import traceback as _tb
+                            print(f'[PDF] Code block image conversion error: {ce}')
+                            _tb.print_exc()
+
+                        WIDE_TABLE_COL_THRESHOLD = 5
+                        wide_table_images = {}
+
+                        try:
+                            pdf_doc_t = _pdfium.PdfDocument(file['path'])
+                            rendered_pages_t = {}
+                            table_idx = 0
+
+                            for entry in result.document.iterate_items():
+                                item = entry[0] if isinstance(entry, (tuple, list)) else entry
+                                item_label = str(getattr(item, 'label', '')).upper()
+                                if 'TABLE' not in item_label:
+                                    continue
+
+                                col_count = 0
+                                table_data = getattr(item, 'data', None)
+                                if table_data is not None:
+                                    col_count = getattr(table_data, 'num_cols', 0)
+                                    if col_count == 0 and hasattr(table_data, 'grid') and table_data.grid:
+                                        col_count = len(table_data.grid[0]) if table_data.grid[0] else 0
+
+                                if col_count >= WIDE_TABLE_COL_THRESHOLD:
+                                    for prov in getattr(item, 'prov', []):
+                                        bbox = getattr(prov, 'bbox', None)
+                                        if bbox is None:
+                                            continue
+                                        page_no = prov.page_no
+                                        if page_no not in rendered_pages_t:
+                                            pdf_page = pdf_doc_t[page_no - 1]
+                                            pt_w = pdf_page.get_width()
+                                            pt_h = pdf_page.get_height()
+                                            bitmap = pdf_page.render(scale=2.0)
+                                            pil_img = bitmap.to_pil()
+                                            rendered_pages_t[page_no] = (pil_img, pt_w, pt_h)
+
+                                        pil_img, pt_w, pt_h = rendered_pages_t[page_no]
+                                        img_w, img_h = pil_img.size
+                                        sx = img_w / pt_w
+                                        sy = img_h / pt_h
+                                        pad = 8
+                                        x1 = max(0, int(bbox.l * sx) - pad)
+                                        y1 = max(0, int((pt_h - bbox.t) * sy) - pad)
+                                        x2 = min(img_w, int(bbox.r * sx) + pad)
+                                        y2 = min(img_h, int((pt_h - bbox.b) * sy) + pad)
+                                        cropped = pil_img.crop((x1, y1, x2, y2))
+                                        buf = _io.BytesIO()
+                                        cropped.save(buf, format='PNG')
+                                        b64str = _b64.b64encode(buf.getvalue()).decode('utf-8')
+                                        wide_table_images[table_idx] = f'data:image/png;base64,{b64str}'
+                                        break
+
+                                table_idx += 1
+
+                            pdf_doc_t.close()
+                            print(f'[PDF] {len(wide_table_images)} wide table image(s) cropped (total tables: {table_idx})')
+
+                        except Exception as te:
+                            import traceback as _tb
+                            print(f'[PDF] Wide table image conversion error: {te}')
+                            wide_table_images = {}
+                            _tb.print_exc()
+
+                        formula_images = []
+                        try:
+                            pdf_doc_fm = _pdfium.PdfDocument(file['path'])
+                            rendered_pages_fm = {}
+                            for entry in result.document.iterate_items():
+                                item = entry[0] if isinstance(entry, (tuple, list)) else entry
+                                if 'FORMULA' not in str(getattr(item, 'label', '')).upper():
+                                    continue
+                                for prov in getattr(item, 'prov', []):
+                                    bbox = getattr(prov, 'bbox', None)
+                                    if bbox is None:
+                                        continue
+                                    page_no = prov.page_no
+                                    if page_no not in rendered_pages_fm:
+                                        pdf_page = pdf_doc_fm[page_no - 1]
+                                        pt_w = pdf_page.get_width()
+                                        pt_h = pdf_page.get_height()
+                                        pil_img = pdf_page.render(scale=2.0).to_pil()
+                                        rendered_pages_fm[page_no] = (pil_img, pt_w, pt_h)
+                                    pil_img, pt_w, pt_h = rendered_pages_fm[page_no]
                                     img_w, img_h = pil_img.size
                                     sx = img_w / pt_w
                                     sy = img_h / pt_h
@@ -1801,62 +2684,23 @@ class Dodari:
                                     cropped = pil_img.crop((x1, y1, x2, y2))
                                     buf = _io.BytesIO()
                                     cropped.save(buf, format='PNG')
-                                    b64str = _b64.b64encode(buf.getvalue()).decode('utf-8')
-                                    wide_table_images[table_idx] = f'data:image/png;base64,{b64str}'
+                                    formula_images.append(f'data:image/png;base64,{_b64.b64encode(buf.getvalue()).decode()}')
                                     break
+                            pdf_doc_fm.close()
+                            print(f'[PDF] {len(formula_images)} formula image(s) cropped')
+                        except Exception as fe:
+                            import traceback as _tb
+                            print(f'[PDF] Formula image conversion error: {fe}')
+                            _tb.print_exc()
 
-                            table_idx += 1
+                        html_content = result.document.export_to_html(image_mode=ImageRefMode.EMBEDDED)
 
-                        pdf_doc_t.close()
-                        print(f'[PDF] {len(wide_table_images)} wide table image(s) cropped (total tables: {table_idx})')
-
-                    except Exception as te:
-                        import traceback as _tb
-                        print(f'[PDF] Wide table image conversion error: {te}')
-                        wide_table_images = {}
-                        _tb.print_exc()
-
-                    formula_images = []
-                    try:
-                        pdf_doc_fm = _pdfium.PdfDocument(file['path'])
-                        rendered_pages_fm = {}
-                        for entry in result.document.iterate_items():
-                            item = entry[0] if isinstance(entry, (tuple, list)) else entry
-                            if 'FORMULA' not in str(getattr(item, 'label', '')).upper():
-                                continue
-                            for prov in getattr(item, 'prov', []):
-                                bbox = getattr(prov, 'bbox', None)
-                                if bbox is None:
-                                    continue
-                                page_no = prov.page_no
-                                if page_no not in rendered_pages_fm:
-                                    pdf_page = pdf_doc_fm[page_no - 1]
-                                    pt_w = pdf_page.get_width()
-                                    pt_h = pdf_page.get_height()
-                                    pil_img = pdf_page.render(scale=2.0).to_pil()
-                                    rendered_pages_fm[page_no] = (pil_img, pt_w, pt_h)
-                                pil_img, pt_w, pt_h = rendered_pages_fm[page_no]
-                                img_w, img_h = pil_img.size
-                                sx = img_w / pt_w
-                                sy = img_h / pt_h
-                                pad = 8
-                                x1 = max(0, int(bbox.l * sx) - pad)
-                                y1 = max(0, int((pt_h - bbox.t) * sy) - pad)
-                                x2 = min(img_w, int(bbox.r * sx) + pad)
-                                y2 = min(img_h, int((pt_h - bbox.b) * sy) + pad)
-                                cropped = pil_img.crop((x1, y1, x2, y2))
-                                buf = _io.BytesIO()
-                                cropped.save(buf, format='PNG')
-                                formula_images.append(f'data:image/png;base64,{_b64.b64encode(buf.getvalue()).decode()}')
-                                break
-                        pdf_doc_fm.close()
-                        print(f'[PDF] {len(formula_images)} formula image(s) cropped')
-                    except Exception as fe:
-                        import traceback as _tb
-                        print(f'[PDF] Formula image conversion error: {fe}')
-                        _tb.print_exc()
-
-                    html_content = result.document.export_to_html(image_mode=ImageRefMode.EMBEDDED)
+                        if _dodari_resume_save_struct(
+                            self.temp_folder_1, 0, html_content,
+                            picture_delete, picture_skip,
+                            code_block_images, wide_table_images, formula_images
+                        ):
+                            print('[Resume] PDF structure cached')
                     print('[PDF Translation] HTML structure complete. Starting text translation pipeline (BeautifulSoup)...')
 
                     soup_1 = BeautifulSoup(html_content, 'html.parser')
@@ -1947,7 +2791,10 @@ class Dodari:
                             
                     if only_texts:
                         progress(0.7, desc=f'[PDF] Batch translating text... ({format_korean_time(int(time.time() - self.start))} elapsed)')
-                        parti_1, parti_2 = self.batch_translate_engine(only_texts, whole_particle, 'epub', genre_val, tone_val, bilingual_order_val)
+                        parti_1, parti_2 = self.resumable_translate(
+                            only_texts, whole_particle, 'epub', genre_val, tone_val, bilingual_order_val,
+                            self.temp_folder_1, file['orig_name'], resume_settings, resume_done, progress
+                        )
 
                         assembled_1 = []
                         assembled_2 = []
@@ -1983,7 +2830,12 @@ class Dodari:
 
                     all_file_path.extend([done_path_1, done_path_2])
                     print(f'[PDF Translation] Success! EPUB created: {done_path_1}, {done_path_2}')
-                    
+                    _dodari_resume_cleanup(self.temp_folder_1)
+
+                except DodariCliError as err:
+                    print(f'[PDF Translation] CLI engine stopped: {err}')
+                    print('[Resume] Progress is preserved, rerun to continue.')
+                    continue
                 except Exception as err:
                     import traceback
                     print(f'[PDF Translation] Error: {err}')
@@ -2005,7 +2857,25 @@ class Dodari:
                     particle.append(0)
                     whole_particle.extend(particle)
 
-                particle_list_1, particle_list_2 = self.batch_translate_engine(only_texts, whole_particle, 'txt', genre_val, tone_val, bilingual_order_val)
+                if _dodari_resume_should_resume(self.temp_folder_1, resume_settings):
+                    resume_done = _dodari_resume_load_snapshot(self.temp_folder_1, resume_settings)['done']
+                    print(f'[Resume] Existing progress found for "{file["orig_name"]}"')
+                    print(f'[Resume] {len(resume_done)} translation chunk(s) already done, continuing')
+                else:
+                    self.remove_folder(self.temp_folder_1)
+                    resume_done = []
+                    _dodari_resume_save_snapshot(self.temp_folder_1, file['orig_name'], resume_settings, [])
+
+                try:
+                    particle_list_1, particle_list_2 = self.resumable_translate(
+                        only_texts, whole_particle, 'txt', genre_val, tone_val, bilingual_order_val,
+                        self.temp_folder_1, file['orig_name'], resume_settings, resume_done, progress
+                    )
+                except Exception as err:
+                    self.finalize_file_streams(book, output_file_1, output_file_2)
+                    print(f'[TXT Translation] Failed: {err}')
+                    print('[TXT Translation] Progress is preserved, rerun to resume.')
+                    continue
 
                 translated_particle_1 = ' '.join(particle_list_1)
                 translated_particle_2 = ' '.join(particle_list_2)
@@ -2013,6 +2883,7 @@ class Dodari:
                 output_file_2.write(translated_particle_2)
                 all_file_path.extend([output_file_1.name, output_file_2.name])
                 self.finalize_file_streams(book, output_file_1, output_file_2)
+                _dodari_resume_cleanup(self.temp_folder_1)
 
         sec = self.reset_session_and_gc()
 
@@ -2157,6 +3028,16 @@ class Dodari:
                 )
 
     def request_gemma_api_single(self, text: str, genre_val: str, tone_val: str = "서술체 (~다)") -> str:
+        if _dodari_cli_is_engine(self.gemma_model):
+            try:
+                out = self.request_cli_batch([text], genre_val, tone_val)
+                return out[0] if out else text
+            except DodariCliRateLimitError:
+                raise
+            except DodariCliError as err:
+                print(f'Single CLI call failed: {err}')
+                return text
+
         genre_instruction = self.get_genre_prompt_extension(genre_val)
         tone_instruction = self.get_tone_prompt_extension(tone_val)
         prompt = (
@@ -2206,9 +3087,53 @@ class Dodari:
 
         return [result.get(i + 1, '') for i in range(expected_count)]
 
+    def build_cli_system_prompt(self, genre_val: str, tone_val: str = "서술체 (~다)") -> str:
+        genre_instruction = self.get_genre_prompt_extension(genre_val)
+        tone_instruction = self.get_tone_prompt_extension(tone_val)
+
+        glossary_instruction = ''
+        if self.user_glossary:
+            terms = ', '.join(f'"{src}" → "{tgt}"' for src, tgt in self.user_glossary.items())
+            glossary_instruction = f'TERMINOLOGY (Strictly enforce — no exceptions): {terms}. '
+
+        return (
+            f"You are a professional translator. "
+            f"Translate each numbered sentence given by the user into {self.target_lang_prompt}. "
+            f"{glossary_instruction}"
+            f"{genre_instruction}"
+            f"{tone_instruction}"
+            f'Return a JSON object with a "translations" array containing exactly one '
+            f"translated string per input sentence, in the same order. "
+            f"Do not merge, split, skip, or reorder sentences. "
+            f"Do not add any explanation or extra text."
+        )
+
+    def request_cli_batch(self, texts: list, genre_val: str, tone_val: str = "서술체 (~다)") -> list:
+        if not texts:
+            return []
+        system_prompt = self.build_cli_system_prompt(genre_val, tone_val)
+        t0 = time.time()
+        try:
+            if self.gemma_model == ENGINE_CODEX_CLI:
+                result = _dodari_cli_run_codex(texts, system_prompt)
+            else:
+                result = _dodari_cli_run_claude(texts, system_prompt)
+        except DodariCliRateLimitError as err:
+            print(f'  [CLI Engine] SUBSCRIPTION LIMIT REACHED: {err}', flush=True)
+            print('  [CLI Engine] Stopping now. Progress is kept — rerun after the limit resets.', flush=True)
+            raise
+        except DodariCliError as err:
+            print(f'  [CLI Engine] failed: {err}', flush=True)
+            raise
+        print(f'  [CLI Engine] {self.gemma_model} batch of {len(texts)} done in {time.time() - t0:.1f}s', flush=True)
+        return result
+
     def request_gemma_api_batch(self, texts: list, genre_val: str, tone_val: str = "서술체 (~다)") -> list:
         if not texts:
             return []
+
+        if _dodari_cli_is_engine(self.gemma_model):
+            return self.request_cli_batch(texts, genre_val, tone_val)
 
         genre_instruction = self.get_genre_prompt_extension(genre_val)
         tone_instruction = self.get_tone_prompt_extension(tone_val)
@@ -2284,10 +3209,7 @@ class Dodari:
         print(f'  [Batch {idx+1}/{total_chunks}] Done {elapsed:.1f}s | → "{first_out}..."')
         return result
 
-    def batch_translate_engine(self, only_texts, whole_particle, what, genre_val="일반 문서(기본)", tone_val="서술체 (~다)", bilingual_order="번역문(원문)"):
-        particle_list_1 = []
-        particle_list_2 = []
-
+    def translate_sentence_block(self, only_texts, genre_val="일반 문서(기본)", tone_val="서술체 (~다)"):
         processed_texts = list(only_texts)
 
         from concurrent.futures import ThreadPoolExecutor
@@ -2323,11 +3245,21 @@ class Dodari:
         speed = f'{total/total_elapsed:.1f} sent/s' if total_elapsed > 0 else '-'
         print(f'▶ Translation complete: {total} sentences / total {total_elapsed:.1f}s ({speed})')
 
+        return translated_list
+
+    def assemble_translated_particles(self, translated_list, whole_particle, what, bilingual_order="번역문(원문)"):
+        particle_list_1 = []
+        particle_list_2 = []
+
         text_idx = 0
 
         for output_idx, whole in enumerate(whole_particle):
             if whole:
-                generated_text = translated_list[output_idx - text_idx]
+                _t_idx = output_idx - text_idx
+                generated_text = _dodari_resume_safe_index(translated_list, _t_idx, None)
+                if generated_text is None:
+                    print(f'[Warning] Translation index out of range ({_t_idx}/{len(translated_list)}), keeping source text')
+                    generated_text = whole_particle[output_idx]
 
                 if bilingual_order == "원문(번역문)":
                     translated_text_1 = "{t2} ({t1})".format(t1=generated_text, t2=whole_particle[output_idx])
@@ -2345,6 +3277,47 @@ class Dodari:
                     particle_list_1.append('\n')
                     particle_list_2.append('\n')
 
+        return particle_list_1, particle_list_2
+
+    def resumable_translate(self, only_texts, whole_particle, what, genre_val, tone_val, bilingual_order,
+                            resume_folder, source_name, resume_settings, resume_done, progress=None, key_prefix=''):
+        chunk_size = max(1, self.translate_batch_size * self.translate_workers)
+        text_chunks = _dodari_resume_split_chunks(only_texts, chunk_size)
+        total_chunks = len(text_chunks)
+        translated_all = []
+
+        for c_idx, chunk in enumerate(text_chunks):
+            chunk_id = f'{key_prefix}{c_idx}'
+            chunk_key = _dodari_resume_chunk_key(chunk_id)
+            cached = None
+            if _dodari_resume_is_done(resume_done, chunk_key):
+                cached = _dodari_resume_load_chunk(resume_folder, chunk_id)
+            if cached is not None and len(cached) == len(chunk):
+                print(f'[Resume] Chunk {c_idx + 1}/{total_chunks} loaded from cache')
+                translated_all.extend(cached)
+                continue
+
+            print(f'[Chunk] Translating {c_idx + 1}/{total_chunks} ({len(chunk)} sentences)')
+            if progress is not None:
+                _el = int(time.time() - self.start) if self.start else 0
+                progress(0.7, desc=f'[Chunk] {c_idx + 1}/{total_chunks} translating... (elapsed: {format_korean_time(_el)})')
+
+            chunk_translated = self.translate_sentence_block(chunk, genre_val, tone_val)
+            if len(chunk_translated) != len(chunk):
+                print(f'[Warning] Chunk {c_idx + 1} returned {len(chunk_translated)} of {len(chunk)} sentences, padding with source text')
+                chunk_translated = (list(chunk_translated) + list(chunk))[:len(chunk)]
+
+            _dodari_resume_save_chunk(resume_folder, chunk_id, chunk_translated)
+            _dodari_resume_mark_done(resume_folder, source_name, resume_settings, resume_done, chunk_key)
+            translated_all.extend(chunk_translated)
+
+        return self.assemble_translated_particles(translated_all, whole_particle, what, bilingual_order)
+
+    def batch_translate_engine(self, only_texts, whole_particle, what, genre_val="일반 문서(기본)", tone_val="서술체 (~다)", bilingual_order="번역문(원문)"):
+        translated_list = self.translate_sentence_block(only_texts, genre_val, tone_val)
+        particle_list_1, particle_list_2 = self.assemble_translated_particles(
+            translated_list, whole_particle, what, bilingual_order
+        )
         print('Translation reassembly complete')
         return particle_list_1, particle_list_2
 
@@ -2354,6 +3327,8 @@ class Dodari:
             "Choose EXACTLY ONE from this list: [IT 및 엔지니어링, 문학 및 소설, 인문 및 사회과학, 비즈니스 및 경제, 영상 및 대본, 일반 문서(기본)].\n"
             "Respond ONLY with the chosen genre keyword and nothing else."
         )
+        if _dodari_cli_is_engine(self.gemma_model):
+            return "일반 문서(기본)"
         payload = {
             "model": self.gemma_model,
             "messages": [{"role": "user", "content": prompt}],
@@ -2541,10 +3516,19 @@ class Dodari:
     def repack_epub_contents(self, folder_path: PathType, epub_name: PathType):
         try:
             zip_module = zipfile.ZipFile(epub_name, 'w', zipfile.ZIP_DEFLATED)
+            _skip_dirs = (RESUME_CHUNK_DIR, RESUME_STRUCT_DIR)
             for root, dirs, files in os.walk(folder_path):
+                for _sd in _skip_dirs:
+                    if _sd in dirs:
+                        dirs.remove(_sd)
                 for file in files:
                     file_path = os.path.join(root, file)
-                    zip_module.write(file_path, os.path.relpath(file_path, folder_path))
+                    rel_path = os.path.relpath(file_path, folder_path)
+                    if rel_path == RESUME_SNAPSHOT_NAME:
+                        continue
+                    if any(rel_path.startswith(_sd + os.sep) for _sd in _skip_dirs):
+                        continue
+                    zip_module.write(file_path, rel_path)
             zip_module.close()
         except Exception as err:
             print('EPUB file creation failed.')
@@ -2553,7 +3537,10 @@ class Dodari:
 
     def list_epub_html_files(self) -> List:
         file_path = []
-        for root, _, files in os.walk(self.temp_folder_1):
+        for root, dirs, files in os.walk(self.temp_folder_1):
+            for _sd in (RESUME_CHUNK_DIR, RESUME_STRUCT_DIR):
+                if _sd in dirs:
+                    dirs.remove(_sd)
             for file in files:
                 if file.endswith(('xhtml', 'html', 'htm')):
                     file_path.append(os.path.join(root, file))

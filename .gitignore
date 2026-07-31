@@ -1,10 +1,10 @@
 venv
 models
-temp_1
-temp_2
+temp_*
 outputs
 .DS_Store
 ._.DS_Store
 **/.DS_Store
 **/._.DS_Store
 dodari_env
+__pycache__

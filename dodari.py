@@ -9,6 +9,7 @@ from datetime import timedelta
 import logging, warnings
 import copy
 import re, time, platform, shutil, zipfile, subprocess, socket, json, locale, tempfile
+from difflib import SequenceMatcher
 import requests
 import chardet
 
@@ -32,7 +33,7 @@ except Exception as _e:
 
 import ebooklib
 from ebooklib import epub
-from langdetect import detect, detect_langs, DetectorFactory
+from langdetect import detect_langs, DetectorFactory
 DetectorFactory.seed = 0
 import nltk
 
@@ -53,7 +54,17 @@ def cleanup_llm_server():
         time.sleep(0.5)
     print("[SHUTDOWN] Port 8000 released")
 
-atexit.register(cleanup_llm_server)
+_dodari_llm_server_started = False
+
+def _dodari_mark_llm_started():
+    global _dodari_llm_server_started
+    _dodari_llm_server_started = True
+
+def _dodari_cleanup_at_exit():
+    if _dodari_llm_server_started:
+        cleanup_llm_server()
+
+atexit.register(_dodari_cleanup_at_exit)
 
 def format_korean_time(seconds: int) -> str:
     seconds = max(0, int(seconds))
@@ -109,18 +120,34 @@ def _dodari_resume_temp_folder(basename, suffix):
 def _dodari_resume_snapshot_path(folder):
     return os.path.join(folder, RESUME_SNAPSHOT_NAME)
 
+def _dodari_resume_write_json(path, payload, label):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp_path = path + '.tmp'
+        with open(tmp_path, 'w', encoding='utf-8') as fp:
+            json.dump(payload, fp, ensure_ascii=False)
+            fp.flush()
+            os.fsync(fp.fileno())
+        os.replace(tmp_path, path)
+        return True
+    except Exception as err:
+        print('[Resume] {l}: {e}'.format(l=label, e=err))
+        return False
+
+def _dodari_resume_read_json(path):
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as fp:
+            return json.load(fp)
+    except Exception:
+        return None
+
 def _dodari_resume_empty_snapshot():
     return {'source': None, 'settings': {}, 'done': []}
 
 def _dodari_resume_load_snapshot(folder, settings):
-    path = _dodari_resume_snapshot_path(folder)
-    if not os.path.isfile(path):
-        return _dodari_resume_empty_snapshot()
-    try:
-        with open(path, 'r', encoding='utf-8') as fp:
-            data = json.load(fp)
-    except Exception:
-        return _dodari_resume_empty_snapshot()
+    data = _dodari_resume_read_json(_dodari_resume_snapshot_path(folder))
     if not isinstance(data, dict):
         return _dodari_resume_empty_snapshot()
     stored = data.get('signature')
@@ -132,25 +159,15 @@ def _dodari_resume_load_snapshot(folder, settings):
     return {'source': data.get('source'), 'settings': data.get('settings') or {}, 'done': done}
 
 def _dodari_resume_save_snapshot(folder, source_name, settings, done):
-    try:
-        os.makedirs(folder, exist_ok=True)
-        payload = {
-            'source': source_name,
-            'settings': {k: settings.get(k, '') for k in RESUME_SETTING_KEYS},
-            'signature': _dodari_resume_settings_signature(settings),
-            'done': list(done),
-        }
-        path = _dodari_resume_snapshot_path(folder)
-        tmp_path = path + '.tmp'
-        with open(tmp_path, 'w', encoding='utf-8') as fp:
-            json.dump(payload, fp, ensure_ascii=False)
-            fp.flush()
-            os.fsync(fp.fileno())
-        os.replace(tmp_path, path)
-        return True
-    except Exception as err:
-        print('[Resume] Snapshot write failed: {e}'.format(e=err))
-        return False
+    payload = {
+        'source': source_name,
+        'settings': {k: settings.get(k, '') for k in RESUME_SETTING_KEYS},
+        'signature': _dodari_resume_settings_signature(settings),
+        'done': list(done),
+    }
+    return _dodari_resume_write_json(
+        _dodari_resume_snapshot_path(folder), payload, 'Snapshot write failed'
+    )
 
 def _dodari_resume_mark_done(folder, source_name, settings, done, unit):
     if unit not in done:
@@ -160,14 +177,7 @@ def _dodari_resume_mark_done(folder, source_name, settings, done, unit):
 def _dodari_resume_should_resume(folder, settings):
     if not os.path.isdir(folder):
         return False
-    path = _dodari_resume_snapshot_path(folder)
-    if not os.path.isfile(path):
-        return False
-    try:
-        with open(path, 'r', encoding='utf-8') as fp:
-            data = json.load(fp)
-    except Exception:
-        return False
+    data = _dodari_resume_read_json(_dodari_resume_snapshot_path(folder))
     if not isinstance(data, dict):
         return False
     return data.get('signature') == _dodari_resume_settings_signature(settings)
@@ -188,29 +198,51 @@ def _dodari_resume_chunk_path(folder, index):
     return os.path.join(folder, RESUME_CHUNK_DIR, 'chunk_{i}.json'.format(i=_dodari_resume_sanitize(index)))
 
 def _dodari_resume_save_chunk(folder, index, payload):
-    try:
-        path = _dodari_resume_chunk_path(folder, index)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp_path = path + '.tmp'
-        with open(tmp_path, 'w', encoding='utf-8') as fp:
-            json.dump(payload, fp, ensure_ascii=False)
-            fp.flush()
-            os.fsync(fp.fileno())
-        os.replace(tmp_path, path)
-        return True
-    except Exception as err:
-        print('[Resume] Chunk write failed ({i}): {e}'.format(i=index, e=err))
-        return False
+    return _dodari_resume_write_json(
+        _dodari_resume_chunk_path(folder, index), payload,
+        'Chunk write failed ({i})'.format(i=index)
+    )
 
 def _dodari_resume_load_chunk(folder, index):
-    path = _dodari_resume_chunk_path(folder, index)
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, 'r', encoding='utf-8') as fp:
-            return json.load(fp)
-    except Exception:
-        return None
+    return _dodari_resume_read_json(_dodari_resume_chunk_path(folder, index))
+
+_DODARI_TRANSLATOR_NOTE_RE = re.compile(
+    r'\(\s*[^()]*?(?:'
+    r'(?:위|앞|상기|해당|이)\s*문장'
+    r'|문장[과에은의]?\s*(?:연결|연속|포함|계속|이어|통합|생략)'
+    r'|\d+\s*번(?:\s*문장)?[과의은에]'
+    r'|번역(?:이|을|은)?\s*불가|번역함'
+    r'|판독\s*불가'
+    r'|문장이\s*불완전'
+    r'|중복\s*내용'
+    r'|원문\s*유지'
+    r')[^()]*\)'
+)
+
+def _dodari_strip_translator_notes(text):
+    if not text or '(' not in text:
+        return text
+    cleaned = _DODARI_TRANSLATOR_NOTE_RE.sub('', text)
+    if cleaned != text:
+        cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
+    return cleaned
+
+def _dodari_pdf_has_text_layer(doc, sample_size=8, min_chars=40):
+    total = len(doc)
+    if total == 0:
+        return False
+    step = (total - 1) / max(min(sample_size, total) - 1, 1)
+    indexes = sorted({round(i * step) for i in range(min(sample_size, total))})
+    hits = 0
+    for idx in indexes:
+        try:
+            if len(doc[idx].get_text().strip()) >= min_chars:
+                hits += 1
+        except Exception:
+            pass
+    return hits * 2 >= len(indexes)
+
+FORMULA_NOT_DECODED_RE = re.compile(r'formula\s+not\s+decoded', re.IGNORECASE)
 
 RESUME_STRUCT_DIR = 'pdf_struct'
 RESUME_STRUCT_VERSION = 1
@@ -254,34 +286,19 @@ def _dodari_resume_restore_struct(payload):
 
 def _dodari_resume_save_struct(folder, index, html_content, picture_delete, picture_skip,
                                code_block_images, wide_table_images, formula_images):
-    try:
-        payload = _dodari_resume_build_struct(
-            html_content, picture_delete, picture_skip,
-            code_block_images, wide_table_images, formula_images
-        )
-        path = _dodari_resume_struct_path(folder, index)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp_path = path + '.tmp'
-        with open(tmp_path, 'w', encoding='utf-8') as fp:
-            json.dump(payload, fp, ensure_ascii=False)
-            fp.flush()
-            os.fsync(fp.fileno())
-        os.replace(tmp_path, path)
-        return True
-    except Exception as err:
-        print('[Resume] PDF structure cache write failed ({i}): {e}'.format(i=index, e=err))
-        return False
+    payload = _dodari_resume_build_struct(
+        html_content, picture_delete, picture_skip,
+        code_block_images, wide_table_images, formula_images
+    )
+    return _dodari_resume_write_json(
+        _dodari_resume_struct_path(folder, index), payload,
+        'PDF structure cache write failed ({i})'.format(i=index)
+    )
 
 def _dodari_resume_load_struct(folder, index):
-    path = _dodari_resume_struct_path(folder, index)
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, 'r', encoding='utf-8') as fp:
-            payload = json.load(fp)
-    except Exception:
-        return None
-    return _dodari_resume_restore_struct(payload)
+    return _dodari_resume_restore_struct(
+        _dodari_resume_read_json(_dodari_resume_struct_path(folder, index))
+    )
 
 def _dodari_resume_split_chunks(items, size):
     data = list(items)
@@ -312,6 +329,16 @@ def _dodari_resume_cleanup(folder):
 
 def _dodari_resume_is_resume_folder(name):
     return bool(re.match(r'^temp_.+_[0-9a-f]{%d}_\d+$' % RESUME_HASH_LEN, str(name)))
+
+def _dodari_prune_resume_dirs(dirs):
+    for name in (RESUME_CHUNK_DIR, RESUME_STRUCT_DIR):
+        if name in dirs:
+            dirs.remove(name)
+    return dirs
+
+def _dodari_is_resume_cache_path(rel_path):
+    return any(str(rel_path).startswith(name + os.sep)
+               for name in (RESUME_CHUNK_DIR, RESUME_STRUCT_DIR))
 
 ENGINE_LOCAL = 'local'
 ENGINE_CLAUDE_CLI = 'claude-cli'
@@ -433,7 +460,7 @@ def _dodari_cli_strip_fence(text):
         s = re.sub(r'\s*```$', '', s)
     return s.strip()
 
-def _dodari_cli_parse_claude(raw, expected_count):
+def _dodari_cli_claude_payload(raw):
     if not raw or not str(raw).strip():
         raise DodariCliError('claude CLI: empty output')
     try:
@@ -451,6 +478,10 @@ def _dodari_cli_parse_claude(raw, expected_count):
         if _dodari_cli_is_rate_limit(f'{status} {detail}'):
             raise DodariCliRateLimitError(message)
         raise DodariCliError(message)
+    return data
+
+def _dodari_cli_parse_claude(raw, expected_count):
+    data = _dodari_cli_claude_payload(raw)
 
     payload = data.get('structured_output')
     if payload is None:
@@ -465,11 +496,7 @@ def _dodari_cli_parse_claude(raw, expected_count):
     items = _dodari_cli_extract_array(payload, 'claude CLI')
     return _dodari_cli_normalize(items, expected_count, 'claude CLI')
 
-def _dodari_cli_parse_codex(raw, expected_count):
-    if not raw or not str(raw).strip():
-        raise DodariCliError('codex CLI: empty output')
-
-    last_message = None
+def _dodari_cli_iter_events(raw):
     for line in str(raw).splitlines():
         line = line.strip()
         if not line or not line.startswith('{'):
@@ -478,23 +505,30 @@ def _dodari_cli_parse_codex(raw, expected_count):
             event = json.loads(line)
         except Exception:
             continue
-        if not isinstance(event, dict):
-            continue
+        if isinstance(event, dict):
+            yield event
 
-        etype = event.get('type')
-        if etype == 'turn.failed':
+def _dodari_cli_last_agent_message(raw, check_failure=False):
+    last_message = None
+    for event in _dodari_cli_iter_events(raw):
+        if check_failure and event.get('type') == 'turn.failed':
             detail = (event.get('error') or {}).get('message', '')
             message = f'codex CLI turn failed: {detail}'
             if _dodari_cli_is_rate_limit(detail):
                 raise DodariCliRateLimitError(message)
             raise DodariCliError(message)
-
         item = event.get('item') or {}
         if item.get('type') == 'agent_message' and item.get('text'):
             last_message = item['text']
-
     if last_message is None:
         raise DodariCliError('codex CLI: no agent_message in event stream')
+    return last_message
+
+def _dodari_cli_parse_codex(raw, expected_count):
+    if not raw or not str(raw).strip():
+        raise DodariCliError('codex CLI: empty output')
+
+    last_message = _dodari_cli_last_agent_message(raw, check_failure=True)
 
     try:
         payload = json.loads(_dodari_cli_strip_fence(last_message))
@@ -504,32 +538,44 @@ def _dodari_cli_parse_codex(raw, expected_count):
     items = _dodari_cli_extract_array(payload, 'codex CLI')
     return _dodari_cli_normalize(items, expected_count, 'codex CLI')
 
-def _dodari_cli_build_claude_cmd(system_prompt, schema_json):
-    return [
-        'claude', '-p',
-        '--output-format', 'json',
-        '--json-schema', schema_json,
+def _dodari_cli_claude_cmd(schema_json=None, system_prompt=None):
+    cmd = ['claude', '-p', '--output-format', 'json']
+    if schema_json is not None:
+        cmd += ['--json-schema', schema_json]
+    cmd += [
         '--tools', '',
         '--disable-slash-commands',
         '--strict-mcp-config',
         '--settings', '{}',
-        '--system-prompt', system_prompt,
     ]
+    if system_prompt is not None:
+        cmd += ['--system-prompt', system_prompt]
+    return cmd
 
-def _dodari_cli_build_codex_cmd(schema_path, instructions_path, model=None):
-    cmd = [
-        'codex', 'exec',
-        '--json',
-        '--output-schema', schema_path,
+def _dodari_cli_build_claude_cmd(system_prompt, schema_json):
+    return _dodari_cli_claude_cmd(schema_json, system_prompt)
+
+def _dodari_cli_codex_cmd(schema_path=None, instructions_path=None, model=None):
+    cmd = ['codex', 'exec', '--json']
+    if schema_path is not None:
+        cmd += ['--output-schema', schema_path]
+    cmd += [
         '--skip-git-repo-check',
         '--ephemeral',
         '--sandbox', 'read-only',
-        '-c', f'model_instructions_file={json.dumps(instructions_path)}',
     ]
+    if instructions_path is not None:
+        cmd += ['-c', f'model_instructions_file={json.dumps(instructions_path)}']
     if model:
         cmd += ['--model', model]
     cmd.append('-')
     return cmd
+
+def _dodari_cli_build_codex_cmd(schema_path, instructions_path, model=None):
+    return _dodari_cli_codex_cmd(schema_path, instructions_path, model)
+
+def _dodari_cli_combined_output(proc):
+    return (getattr(proc, 'stdout', '') or '') + (getattr(proc, 'stderr', '') or '')
 
 def _dodari_cli_run_subprocess(cmd, stdin_payload, label):
     try:
@@ -598,41 +644,11 @@ def _dodari_cli_run_codex(texts, system_prompt, model=None):
 
 def _dodari_cli_ask(engine, prompt):
     if engine == ENGINE_CODEX_CLI:
-        cmd = ['codex', 'exec', '--json', '--skip-git-repo-check',
-               '--ephemeral', '--sandbox', 'read-only', '-']
-        stdout = _dodari_cli_run_subprocess(cmd, prompt, 'codex CLI')
-        for line in reversed(stdout.splitlines()):
-            line = line.strip()
-            if not line.startswith('{'):
-                continue
-            try:
-                event = json.loads(line)
-            except Exception:
-                continue
-            item = event.get('item') or {}
-            if item.get('type') == 'agent_message' and item.get('text'):
-                return str(item['text']).strip()
-        raise DodariCliError('codex CLI: no agent_message in event stream')
+        stdout = _dodari_cli_run_subprocess(_dodari_cli_codex_cmd(), prompt, 'codex CLI')
+        return str(_dodari_cli_last_agent_message(stdout, check_failure=True)).strip()
 
-    cmd = [
-        'claude', '-p',
-        '--output-format', 'json',
-        '--tools', '',
-        '--disable-slash-commands',
-        '--strict-mcp-config',
-        '--settings', '{}',
-    ]
-    stdout = _dodari_cli_run_subprocess(cmd, prompt, 'claude CLI')
-    try:
-        data = json.loads(stdout.strip())
-    except Exception as err:
-        raise DodariCliError(f'claude CLI: invalid JSON output ({err})')
-    if data.get('is_error') or data.get('api_error_status'):
-        detail = data.get('result') or ''
-        message = f'claude CLI error: {detail}'
-        if _dodari_cli_is_rate_limit(f'{data.get("api_error_status")} {detail}'):
-            raise DodariCliRateLimitError(message)
-        raise DodariCliError(message)
+    stdout = _dodari_cli_run_subprocess(_dodari_cli_claude_cmd(), prompt, 'claude CLI')
+    data = _dodari_cli_claude_payload(stdout)
     return str(data.get('result', '')).strip()
 
 def _dodari_cli_check_login(engine, binary):
@@ -669,7 +685,7 @@ def _dodari_cli_check_login(engine, binary):
     except Exception as err:
         return False, f'codex login status failed: {err}'
 
-    out = ((getattr(proc, 'stdout', '') or '') + (getattr(proc, 'stderr', '') or '')).lower()
+    out = _dodari_cli_combined_output(proc).lower()
     if getattr(proc, 'returncode', 1) == 0 and 'not logged in' not in out:
         return True, 'codex CLI ready'
     return False, (
@@ -692,7 +708,7 @@ def _dodari_cli_preflight(engine):
         proc = subprocess.run(
             [binary, '--version'], capture_output=True, text=True, timeout=30
         )
-        version_raw = (getattr(proc, 'stdout', '') or '') + (getattr(proc, 'stderr', '') or '')
+        version_raw = _dodari_cli_combined_output(proc)
     except Exception as err:
         return False, f'{binary} --version failed: {err}'
 
@@ -770,6 +786,194 @@ def _dodari_set_block(tag, text, mode, soup):
             new_p = soup.new_tag('p')
             new_p.string = seg
             tag.append(new_p)
+
+def _dodari_pp_norm_words(s):
+    s = s.lower()
+    for lig, rep in (('\ufb01', 'fi'), ('\ufb02', 'fl'), ('\ufb00', 'ff'), ('\ufb03', 'ffi'), ('\ufb04', 'ffl')):
+        s = s.replace(lig, rep)
+    s = re.sub(r'[\u2010-\u2015\u2212]', '-', s)
+    s = re.sub(r'[^a-z0-9]+', ' ', s)
+    return s.split()
+
+def _dodari_pp_blocks_to_paragraphs(blocks):
+    paras = []
+    for b in blocks:
+        raw = re.sub(r'\s+', ' ', b['raw']).strip()
+        if not raw:
+            continue
+        indented = (b['x0'] - b['margin']) > 6
+        headingish = len(raw) < 60 and not re.search(r'[.?!\u2026"\u201d\'\u2019)]$', raw)
+        merge = (paras and not indented and not headingish
+                 and not paras[-1]['heading'] and b['first_of_page'])
+        if merge:
+            paras[-1]['raw'] += ' ' + raw
+        else:
+            paras.append({'raw': raw, 'heading': headingish})
+    for p in paras:
+        p['words'] = _dodari_pp_norm_words(p['raw'])
+    return paras
+
+class _DodariPPAligner:
+    def __init__(self, paras):
+        self.paras = paras
+        self.j = 0
+        self.off = 0
+
+    def _ratio(self, a, b):
+        if a == b:
+            return 1.0
+        return SequenceMatcher(None, a, b).ratio()
+
+    def _resync(self, probe):
+        cands = sorted(
+            range(max(0, self.j - 20), min(self.j + 80, len(self.paras))),
+            key=lambda k: (abs(k - self.j), 0 if k >= self.j else 1)
+        )
+        for k in cands:
+            pw = self.paras[k]['words']
+            if len(pw) < 4:
+                continue
+            if self._ratio(pw[:len(probe)], probe) > 0.8:
+                return k
+        return None
+
+    def split_points(self, words):
+        points = []
+        pos = 0
+        while pos < len(words):
+            if self.j >= len(self.paras):
+                break
+            rem = self.paras[self.j]['words'][self.off:]
+            if not rem:
+                self.j += 1
+                self.off = 0
+                continue
+            avail = len(words) - pos
+            if avail >= len(rem):
+                if self._ratio(words[pos:pos + len(rem)], rem) > 0.8:
+                    pos += len(rem)
+                    self.j += 1
+                    self.off = 0
+                    if pos < len(words):
+                        points.append(pos)
+                    continue
+            else:
+                if self._ratio(words[pos:], rem[:avail]) > 0.8:
+                    self.off += avail
+                    pos = len(words)
+                    continue
+            probe = words[pos:pos + 10]
+            if len(probe) >= 4:
+                k = self._resync(probe)
+                if k is not None and (k != self.j or self.off != 0):
+                    self.j = k
+                    self.off = 0
+                    if pos > 0 and (not points or points[-1] != pos):
+                        points.append(pos)
+                    continue
+            break
+        return points
+
+def _dodari_pp_split_text(text, aligner):
+    words = []
+    starts = []
+    for t in re.finditer(r'\S+', text):
+        for w in _dodari_pp_norm_words(t.group()):
+            words.append(w)
+            starts.append(t.start())
+    if not words:
+        return [text]
+    points = aligner.split_points(words)
+    cuts = []
+    for p in points:
+        if p < len(starts):
+            c = starts[p]
+            if not cuts or c > cuts[-1]:
+                cuts.append(c)
+    if not cuts:
+        return [text]
+    segs = []
+    prev = 0
+    for c in cuts + [len(text)]:
+        seg = text[prev:c].strip()
+        if seg:
+            segs.append(seg)
+        prev = c
+    return segs
+
+def _dodari_pp_presplit_soup(soup, paras):
+    if not paras:
+        return 0
+    aligner = _DodariPPAligner(paras)
+    block_names = ('p', 'div', 'li', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'figcaption')
+
+    def _is_candidate(tag):
+        if any(tag.find(bt) for bt in block_names):
+            return False
+        if tag.find_parent('figure') or tag.find('img'):
+            return False
+        text = tag.get_text(' ').strip()
+        return len(text) >= 2 and any(c.isalpha() for c in text)
+
+    runs = []
+    for tag in list(soup.find_all(['p', 'div'])):
+        if not _is_candidate(tag):
+            continue
+        if runs and tag.name == 'p' and runs[-1][-1].name == 'p':
+            sib = runs[-1][-1].next_sibling
+            while sib is not None and isinstance(sib, str) and not sib.strip():
+                sib = sib.next_sibling
+            if sib is tag:
+                runs[-1].append(tag)
+                continue
+        runs.append([tag])
+
+    split_count = 0
+    for run in runs:
+        text = re.sub(r'\s+', ' ', ' '.join(t.get_text(' ').strip() for t in run)).strip()
+        segs = _dodari_pp_split_text(text, aligner)
+        if len(segs) < max(2, len(run)):
+            continue
+        split_count += 1
+        first = run[0]
+        if first.name == 'div':
+            first.clear()
+            for seg in segs:
+                new_p = soup.new_tag('p')
+                new_p.string = seg
+                first.append(new_p)
+        else:
+            for seg in segs:
+                new_p = soup.new_tag('p')
+                new_p.string = seg
+                first.insert_before(new_p)
+            for t in run:
+                t.decompose()
+    return split_count
+
+def _dodari_pp_paragraphs_from_pdf(pdf_path, start_pg, end_pg):
+    src = fitz.open(pdf_path)
+    blocks = []
+    try:
+        for pno in range(start_pg, end_pg + 1):
+            d = src[pno].get_text('dict')
+            page_blocks = []
+            for b in d['blocks']:
+                if b.get('type') != 0 or not b.get('lines'):
+                    continue
+                raw = ' '.join(''.join(sp['text'] for sp in ln['spans']) for ln in b['lines']).strip()
+                raw = re.sub(r'\s+', ' ', raw)
+                if not raw or re.match(r'^\d+$', raw) or 'OceanofPDF' in raw:
+                    continue
+                page_blocks.append((b['lines'][0]['bbox'][0], raw, [ln['bbox'][0] for ln in b['lines']]))
+            if not page_blocks:
+                continue
+            margin = min(x for _, _, xs in page_blocks for x in xs)
+            for idx, (x0, raw, _) in enumerate(page_blocks):
+                blocks.append({'raw': raw, 'x0': x0, 'margin': margin, 'first_of_page': idx == 0})
+    finally:
+        src.close()
+    return _dodari_pp_blocks_to_paragraphs(blocks)
 
 def get_base64_image(path):
     with open(path, "rb") as f:
@@ -2087,7 +2291,7 @@ class Dodari:
         current_platform = platform.system()
 
         if current_platform == 'Darwin':
-            mlx_python = os.environ.get('MLX_PYTHON', 'python3')
+            mlx_python = os.environ.get('MLX_PYTHON', sys.executable)
             cmd = (
                 f"{mlx_python} -m mlx_vlm.server "
                 f"--model {new_model} "
@@ -2096,10 +2300,11 @@ class Dodari:
             )
             print(f"[Model Switch] Mac(MLX) params: batch={self.translate_batch_size}, workers={self.translate_workers}, kv-bits={self.kv_bits}")
             subprocess.Popen(cmd, shell=True)
+            _dodari_mark_llm_started()
 
         elif current_platform == 'Linux':
             vllm_model = os.environ.get('VLLM_MODEL', 'cyankiwi/gemma-4-31B-it-AWQ-4bit')
-            vllm_python = os.environ.get('VLLM_PYTHON', 'python3')
+            vllm_python = os.environ.get('VLLM_PYTHON', sys.executable)
             cmd = (
                 f"{vllm_python} -m vllm.entrypoints.openai.api_server "
                 f"--model {vllm_model} "
@@ -2113,6 +2318,7 @@ class Dodari:
             )
             print(f"[Model Switch] Linux(vLLM) model: {vllm_model}")
             subprocess.Popen(cmd, shell=True)
+            _dodari_mark_llm_started()
 
         elif current_platform == 'Windows':
             print(f"[Model Switch] Windows(Ollama): no restart needed, switching → {new_model}")
@@ -2261,8 +2467,16 @@ class Dodari:
                     self.remove_folder(self.temp_folder_1)
                     self.remove_folder(self.temp_folder_2)
                     resume_done = []
-                    self.extract_epub_contents(self.temp_folder_1, file['path'])
-                    self.extract_epub_contents(self.temp_folder_2, file['path'])
+                    extract_failed = False
+                    for loc_folder in [self.temp_folder_1, self.temp_folder_2]:
+                        if not self.extract_epub_contents(loc_folder, file['path']):
+                            print(f'[EPUB] Extraction failed, skipping file: {file["orig_name"]}')
+                            self.remove_folder(self.temp_folder_1)
+                            self.remove_folder(self.temp_folder_2)
+                            extract_failed = True
+                            break
+                    if extract_failed:
+                        continue
                     _dodari_resume_save_snapshot(self.temp_folder_1, file['orig_name'], resume_settings, [])
                     _dodari_resume_save_snapshot(self.temp_folder_2, file['orig_name'], resume_settings, [])
 
@@ -2405,7 +2619,7 @@ class Dodari:
                         output_file_2.close()
                     except DodariCliError as err:
                         print(f'[CLI Engine] Translation stopped: {err}')
-                        print('[Resume] Progress is preserved, rerun to continue.')
+                        print('[Translation] Aborting this file. Progress is preserved, rerun to resume.')
                         chapter_failed = True
                         break
                     except Exception as err:
@@ -2438,11 +2652,11 @@ class Dodari:
                 _dodari_resume_cleanup(self.temp_folder_2)
 
             elif '.pdf' in ext:
-                print(f'[PDF Translation] Start: {name}{ext}')
-                print(f'[PDF Translation] Lang: {origin_abb} → {target_abb} | Model: {self.gemma_model}')
+                print(f'[PDF] Starting: {name}{ext}')
+                print(f'[PDF] Language: {origin_abb} → {target_abb} | Model: {self.gemma_model}')
 
                 if not DOCLING_AVAILABLE:
-                    print('[PDF Translation] Error: docling not installed. Run: pip install docling')
+                    print('[PDF] Error: docling not installed. Run: pip install docling')
                     continue
 
                 try:
@@ -2451,33 +2665,77 @@ class Dodari:
                     if _dodari_resume_should_resume(self.temp_folder_1, resume_settings):
                         resume_done = _dodari_resume_load_snapshot(self.temp_folder_1, resume_settings)['done']
                         print(f'[Resume] Existing progress found for "{file["orig_name"]}"')
-                        print(f'[Resume] {len(resume_done)} translation chunk(s) already done')
+                        print(f'[Resume] {len(resume_done)} translation chunk(s) already done, PDF structure will be rebuilt')
                     else:
                         self.remove_folder(self.temp_folder_1)
                         resume_done = []
                         _dodari_resume_save_snapshot(self.temp_folder_1, file['orig_name'], resume_settings, [])
 
-                    _struct_cached = _dodari_resume_load_struct(self.temp_folder_1, 0)
-                    if _struct_cached is not None:
-                        html_content      = _struct_cached['html']
-                        picture_delete    = _struct_cached['picture_delete']
-                        picture_skip      = _struct_cached['picture_skip']
-                        code_block_images = _struct_cached['code_block_images']
-                        wide_table_images = _struct_cached['wide_table_images']
-                        formula_images    = _struct_cached['formula_images']
-                        print(f'[Resume] PDF structure loaded from cache '
-                              f'(HTML {len(html_content):,} chars, code {len(code_block_images)}, '
-                              f'table {len(wide_table_images)}, formula {len(formula_images)})')
+                    progress(0, desc='[PDF] Structuring HTML with Docling...')
 
-                    if _struct_cached is None:
-                        progress(0, desc='[PDF] Structuring HTML with Docling...')
+                    total_pages = 1
+                    _pdf_meta = {}
+                    _pdf_cover_bytes = None
+                    _pdf_cover_ext   = 'jpeg'
+                    _pdf_text_layer = False
+                    if FITZ_AVAILABLE:
+                        with fitz.open(file['path']) as _meta_doc:
+                            total_pages = len(_meta_doc)
+                            _pdf_meta   = _meta_doc.metadata or {}
+                            _pdf_text_layer = _dodari_pdf_has_text_layer(_meta_doc)
+                            try:
+                                _p0_imgs = _meta_doc[0].get_images(full=True)
+                                if _p0_imgs:
+                                    _xref = _p0_imgs[0][0]
+                                    _img_data = _meta_doc.extract_image(_xref)
+                                    _pdf_cover_bytes = _img_data['image']
+                                    _pdf_cover_ext   = _img_data.get('ext', 'jpeg')
+                            except Exception as _ce:
+                                print(f'[PDF] Cover image extraction failed: {_ce}')
+                    print(f'[PDF] Total pages: {total_pages}')
+                    print(f'[PDF] Text layer: {"yes — OCR disabled" if _pdf_text_layer else "no — OCR enabled"}')
+                    print(f'[PDF] Meta — title: {_pdf_meta.get("title","")}, author: {_pdf_meta.get("author","")}')
 
-                        print(f"\n[PDF] Processing: {file['path']} - Docling mode")
-                        progress(0, desc='[PDF] Loading Docling engine...')
+                    CHUNK_SIZE = 50
+                    chunk_ranges = [
+                        (s, min(s + CHUNK_SIZE - 1, total_pages - 1))
+                        for s in range(0, total_pages, CHUNK_SIZE)
+                    ]
+                    num_chunks = len(chunk_ranges)
+                    print(f'[PDF] Split into {num_chunks} chunks (max {CHUNK_SIZE} pages each)')
 
+                    import io as _io
+                    import base64 as _b64
+                    try:
+                        import pypdfium2 as _pdfium
+                        _pdfium_ok = True
+                    except ImportError:
+                        _pdfium_ok = False
+
+                    if bilingual_order_val == "원문(번역문)":
+                        done_path_1 = os.path.join(self.output_folder, f"{name}_{origin_abb}({target_abb}).epub")
+                    else:
+                        done_path_1 = os.path.join(self.output_folder, f"{name}_{target_abb}({origin_abb}).epub")
+                    done_path_2 = os.path.join(self.output_folder, f"{name}_{target_abb}.epub")
+
+                    book_1, css_1 = self._init_epub_book(name, target_abb)
+                    book_2, css_2 = self._init_epub_book(name, target_abb)
+                    self._inject_pdf_meta(book_1, _pdf_meta, _pdf_cover_bytes, _pdf_cover_ext)
+                    self._inject_pdf_meta(book_2, _pdf_meta, _pdf_cover_bytes, _pdf_cover_ext)
+                    chapters_1, chapters_2 = [], []
+                    global_img_1, global_img_2 = 0, 0
+                    block_tag_names      = {'p', 'div', 'li', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'figcaption'}
+                    target_tags          = list(block_tag_names)
+                    WIDE_TABLE_COL_THRESHOLD = 5
+
+                    print(f"\n[PDF] Processing: {file['path']} — Docling CPU (12 threads), {num_chunks} chunks")
+                    progress(0, desc='[PDF] Loading Docling engine...')
+
+                    try:
                         pipeline_options = PdfPipelineOptions()
                         pipeline_options.generate_picture_images = True
                         pipeline_options.images_scale = 2.0
+                        pipeline_options.do_ocr = not _pdf_text_layer
                         if sys.platform == 'darwin':
                             pipeline_options.accelerator_options = AcceleratorOptions(
                                 num_threads=8,
@@ -2485,361 +2743,418 @@ class Dodari:
                             )
                         else:
                             pipeline_options.accelerator_options = AcceleratorOptions(
-                                num_threads=4,
+                                num_threads=12,
                                 device=AcceleratorDevice.CPU
                             )
 
-                        print("[PDF] Initializing DocumentConverter...")
-                        converter = DocumentConverter(
-                            format_options={'pdf': PdfFormatOption(pipeline_options=pipeline_options)}
-                        )
+                        for chunk_no, (start_pg, end_pg) in enumerate(chunk_ranges):
+                            chunk_label = f'chunk {chunk_no + 1}/{num_chunks} ({start_pg + 1}-{end_pg + 1}p)'
+                            progress(
+                                chunk_no / num_chunks * 0.7,
+                                desc=f'[PDF] {chunk_label} converting... '
+                                     f'(elapsed: {format_korean_time(int(time.time() - self.start))})'
+                            )
+                            _struct_cached = _dodari_resume_load_struct(self.temp_folder_1, chunk_no)
+                            if _struct_cached is not None:
+                                html_content      = _struct_cached['html']
+                                picture_delete    = _struct_cached['picture_delete']
+                                picture_skip      = _struct_cached['picture_skip']
+                                code_block_images = _struct_cached['code_block_images']
+                                wide_table_images = _struct_cached['wide_table_images']
+                                formula_images    = _struct_cached['formula_images']
+                                print(f'[Resume] PDF chunk {chunk_no} structure loaded from cache '
+                                      f'(HTML {len(html_content):,} chars, code {len(code_block_images)}, '
+                                      f'table {len(wide_table_images)}, formula {len(formula_images)})')
 
-                        print("[PDF] Starting HTML structure extraction (may take 1-3 min depending on PDF size)...")
-                        progress(5, desc='[PDF] Extracting HTML structure...')
-                        result = converter.convert(file['path'])
-                        print("[PDF] Structure extraction complete!")
+                            if _struct_cached is None:
+                                print(f'\n[PDF chunk] {chunk_label} Docling conversion started')
 
-                        picture_delete = set()
-                        picture_skip = set()
-                        try:
-                            picture_regions = []
-                            for pic in getattr(result.document, 'pictures', []):
-                                for prov in getattr(pic, 'prov', []):
-                                    bbox = getattr(prov, 'bbox', None)
-                                    if bbox is not None:
-                                        picture_regions.append((prov.page_no, bbox))
+                                if num_chunks > 1:
+                                    chunk_pdf_path = os.path.join(
+                                        self.output_folder, f'_dodari_chunk_{chunk_no}.pdf'
+                                    )
+                                    _src_fitz   = fitz.open(file['path'])
+                                    _chunk_fitz = fitz.open()
+                                    _chunk_fitz.insert_pdf(_src_fitz, from_page=start_pg, to_page=end_pg)
+                                    _chunk_fitz.save(chunk_pdf_path)
+                                    _chunk_fitz.close()
+                                    _src_fitz.close()
+                                    conv_path = chunk_pdf_path
+                                else:
+                                    conv_path = file['path']
 
-                            if picture_regions:
-                                margin_up    = 150
-                                margin_down  = 15
-                                margin_horiz = 150
-                                for entry in result.document.iterate_items():
-                                    item = entry[0] if isinstance(entry, (tuple, list)) else entry
-                                    item_text = getattr(item, 'text', None)
-                                    if not item_text or not item_text.strip():
-                                        continue
-                                    for tprov in getattr(item, 'prov', []):
-                                        bbox = getattr(tprov, 'bbox', None)
-                                        if bbox is None:
-                                            continue
-                                        tb = bbox
-                                        for (pp, pb) in picture_regions:
-                                            if tprov.page_no != pp:
+                                converter = DocumentConverter(
+                                    format_options={'pdf': PdfFormatOption(pipeline_options=pipeline_options)}
+                                )
+                                result = converter.convert(conv_path)
+                                print(f'[PDF chunk] {chunk_label} structure extracted')
+
+                                picture_delete = set()
+                                picture_skip   = set()
+                                try:
+                                    picture_regions = []
+                                    for pic in getattr(result.document, 'pictures', []):
+                                        for prov in getattr(pic, 'prov', []):
+                                            bbox = getattr(prov, 'bbox', None)
+                                            if bbox is not None:
+                                                picture_regions.append((prov.page_no, bbox))
+
+                                    if picture_regions:
+                                        margin_up    = 150
+                                        margin_down  = 15
+                                        margin_horiz = 150
+                                        for entry in result.document.iterate_items():
+                                            item = entry[0] if isinstance(entry, (tuple, list)) else entry
+                                            item_text = getattr(item, 'text', None)
+                                            if not item_text or not item_text.strip():
                                                 continue
-                                            horiz_ok = (tb.l >= pb.l - margin_horiz and
-                                                        tb.r <= pb.r + margin_horiz)
-                                            if not horiz_ok:
+                                            for tprov in getattr(item, 'prov', []):
+                                                bbox = getattr(tprov, 'bbox', None)
+                                                if bbox is None:
+                                                    continue
+                                                tb = bbox
+                                                for (pp, pb) in picture_regions:
+                                                    if tprov.page_no != pp:
+                                                        continue
+                                                    horiz_ok = (
+                                                        tb.l >= pb.l - margin_horiz and
+                                                        tb.r <= pb.r + margin_horiz
+                                                    )
+                                                    if not horiz_ok:
+                                                        break
+                                                    if tb.t >= pb.b and tb.t <= pb.t + margin_up:
+                                                        picture_delete.add(item_text.strip())
+                                                    elif pb.b - margin_down <= tb.t < pb.b:
+                                                        picture_skip.add(item_text.strip())
+                                                    break
+                                except Exception as pe:
+                                    print(f'[PDF chunk] Image text collection error: {pe}')
+
+                                code_block_images = []
+                                if _pdfium_ok:
+                                    try:
+                                        pdf_doc = _pdfium.PdfDocument(conv_path)
+                                        rendered_pages = {}
+                                        for entry in result.document.iterate_items():
+                                            item = entry[0] if isinstance(entry, (tuple, list)) else entry
+                                            if 'CODE' not in str(getattr(item, 'label', '')).upper():
+                                                continue
+                                            for prov in getattr(item, 'prov', []):
+                                                bbox = getattr(prov, 'bbox', None)
+                                                if bbox is None:
+                                                    continue
+                                                page_no = prov.page_no
+                                                if page_no not in rendered_pages:
+                                                    pdf_page = pdf_doc[page_no - 1]
+                                                    pt_w = pdf_page.get_width()
+                                                    pt_h = pdf_page.get_height()
+                                                    pil_img = pdf_page.render(scale=2.0).to_pil()
+                                                    rendered_pages[page_no] = (pil_img, pt_w, pt_h)
+                                                pil_img, pt_w, pt_h = rendered_pages[page_no]
+                                                img_w, img_h = pil_img.size
+                                                sx = img_w / pt_w
+                                                sy = img_h / pt_h
+                                                pad = 10
+                                                x1 = max(0, int(bbox.l * sx) - pad)
+                                                y1 = max(0, int((pt_h - bbox.t) * sy) - pad)
+                                                x2 = min(img_w, int(bbox.r * sx) + pad)
+                                                y2 = min(img_h, int((pt_h - bbox.b) * sy) + pad)
+                                                cropped = pil_img.crop((x1, y1, x2, y2))
+                                                buf = _io.BytesIO()
+                                                cropped.save(buf, format='PNG')
+                                                code_block_images.append(
+                                                    f'data:image/png;base64,{_b64.b64encode(buf.getvalue()).decode()}'
+                                                )
                                                 break
-                                            if tb.t >= pb.b and tb.t <= pb.t + margin_up:
-                                                picture_delete.add(item_text.strip())
-                                            elif pb.b - margin_down <= tb.t < pb.b:
-                                                picture_skip.add(item_text.strip())
-                                            break
+                                        pdf_doc.close()
+                                        print(f'[PDF chunk] Code blocks: {len(code_block_images)}')
+                                    except Exception as ce:
+                                        print(f'[PDF chunk] Code block image error: {ce}')
 
-                            print(f'[PDF] Delete text: {len(picture_delete)} / Skip text: {len(picture_skip)}')
-                        except Exception as pe:
-                            import traceback as _tb
-                            print(f'[PDF] Image text collection error: {pe}')
-                            _tb.print_exc()
+                                wide_table_images = {}
+                                if _pdfium_ok:
+                                    try:
+                                        pdf_doc_t = _pdfium.PdfDocument(conv_path)
+                                        rendered_pages_t = {}
+                                        local_table_idx  = 0
+                                        for entry in result.document.iterate_items():
+                                            item = entry[0] if isinstance(entry, (tuple, list)) else entry
+                                            if 'TABLE' not in str(getattr(item, 'label', '')).upper():
+                                                continue
+                                            col_count  = 0
+                                            table_data = getattr(item, 'data', None)
+                                            if table_data is not None:
+                                                col_count = getattr(table_data, 'num_cols', 0)
+                                                if col_count == 0 and hasattr(table_data, 'grid') and table_data.grid:
+                                                    col_count = len(table_data.grid[0]) if table_data.grid[0] else 0
+                                            if col_count >= WIDE_TABLE_COL_THRESHOLD:
+                                                for prov in getattr(item, 'prov', []):
+                                                    bbox = getattr(prov, 'bbox', None)
+                                                    if bbox is None:
+                                                        continue
+                                                    page_no = prov.page_no
+                                                    if page_no not in rendered_pages_t:
+                                                        pdf_page = pdf_doc_t[page_no - 1]
+                                                        pt_w = pdf_page.get_width()
+                                                        pt_h = pdf_page.get_height()
+                                                        pil_img = pdf_page.render(scale=2.0).to_pil()
+                                                        rendered_pages_t[page_no] = (pil_img, pt_w, pt_h)
+                                                    pil_img, pt_w, pt_h = rendered_pages_t[page_no]
+                                                    img_w, img_h = pil_img.size
+                                                    sx = img_w / pt_w
+                                                    sy = img_h / pt_h
+                                                    pad = 8
+                                                    x1 = max(0, int(bbox.l * sx) - pad)
+                                                    y1 = max(0, int((pt_h - bbox.t) * sy) - pad)
+                                                    x2 = min(img_w, int(bbox.r * sx) + pad)
+                                                    y2 = min(img_h, int((pt_h - bbox.b) * sy) + pad)
+                                                    cropped = pil_img.crop((x1, y1, x2, y2))
+                                                    buf = _io.BytesIO()
+                                                    cropped.save(buf, format='PNG')
+                                                    wide_table_images[local_table_idx] = (
+                                                        f'data:image/png;base64,{_b64.b64encode(buf.getvalue()).decode()}'
+                                                    )
+                                                    break
+                                            local_table_idx += 1
+                                        pdf_doc_t.close()
+                                        print(f'[PDF chunk] Wide tables: {len(wide_table_images)}')
+                                    except Exception as te:
+                                        print(f'[PDF chunk] Wide table image error: {te}')
 
-                        code_block_images = []
-                        try:
-                            import io as _io
-                            import base64 as _b64
-                            import pypdfium2 as _pdfium
+                                formula_images = []
+                                if _pdfium_ok:
+                                    try:
+                                        pdf_doc_fm = _pdfium.PdfDocument(conv_path)
+                                        rendered_pages_fm = {}
+                                        for entry in result.document.iterate_items():
+                                            item = entry[0] if isinstance(entry, (tuple, list)) else entry
+                                            if 'FORMULA' not in str(getattr(item, 'label', '')).upper():
+                                                continue
+                                            for prov in getattr(item, 'prov', []):
+                                                bbox = getattr(prov, 'bbox', None)
+                                                if bbox is None:
+                                                    continue
+                                                page_no = prov.page_no
+                                                if page_no not in rendered_pages_fm:
+                                                    pdf_page = pdf_doc_fm[page_no - 1]
+                                                    pt_w = pdf_page.get_width()
+                                                    pt_h = pdf_page.get_height()
+                                                    pil_img = pdf_page.render(scale=2.0).to_pil()
+                                                    rendered_pages_fm[page_no] = (pil_img, pt_w, pt_h)
+                                                pil_img, pt_w, pt_h = rendered_pages_fm[page_no]
+                                                img_w, img_h = pil_img.size
+                                                sx = img_w / pt_w
+                                                sy = img_h / pt_h
+                                                pad = 8
+                                                x1 = max(0, int(bbox.l * sx) - pad)
+                                                y1 = max(0, int((pt_h - bbox.t) * sy) - pad)
+                                                x2 = min(img_w, int(bbox.r * sx) + pad)
+                                                y2 = min(img_h, int((pt_h - bbox.b) * sy) + pad)
+                                                cropped = pil_img.crop((x1, y1, x2, y2))
+                                                buf = _io.BytesIO()
+                                                cropped.save(buf, format='PNG')
+                                                formula_images.append(
+                                                    f'data:image/png;base64,{_b64.b64encode(buf.getvalue()).decode()}'
+                                                )
+                                                break
+                                        pdf_doc_fm.close()
+                                        print(f'[PDF chunk] Formulas: {len(formula_images)}')
+                                    except Exception as fe:
+                                        print(f'[PDF chunk] Formula image error: {fe}')
 
-                            pdf_doc = _pdfium.PdfDocument(file['path'])
-                            rendered_pages = {}
+                                chunk_html   = result.document.export_to_html(image_mode=ImageRefMode.EMBEDDED)
+                                body_match   = re.search(r'<body[^>]*>(.*?)</body>', chunk_html, re.DOTALL | re.IGNORECASE)
+                                html_content = '<html><body>' + (body_match.group(1) if body_match else chunk_html) + '</body></html>'
+                                del result, converter, chunk_html
+                                gc.collect()
+                                if num_chunks > 1 and conv_path != file['path'] and os.path.exists(conv_path):
+                                    os.remove(conv_path)
+                                print(f'[PDF chunk] {chunk_label} Docling done — HTML {len(html_content):,} chars')
 
-                            for entry in result.document.iterate_items():
-                                item = entry[0] if isinstance(entry, (tuple, list)) else entry
-                                item_label = str(getattr(item, 'label', '')).upper()
-                                if 'CODE' not in item_label:
-                                    continue
-                                for prov in getattr(item, 'prov', []):
-                                    bbox = getattr(prov, 'bbox', None)
-                                    if bbox is None:
-                                        continue
-                                    page_no = prov.page_no
-                                    if page_no not in rendered_pages:
-                                        pdf_page = pdf_doc[page_no - 1]
-                                        pt_w = pdf_page.get_width()
-                                        pt_h = pdf_page.get_height()
-                                        bitmap = pdf_page.render(scale=2.0)
-                                        pil_img = bitmap.to_pil()
-                                        rendered_pages[page_no] = (pil_img, pt_w, pt_h)
-                                    pil_img, pt_w, pt_h = rendered_pages[page_no]
-                                    img_w, img_h = pil_img.size
-                                    sx = img_w / pt_w
-                                    sy = img_h / pt_h
-                                    pad = 10
-                                    x1 = max(0, int(bbox.l * sx) - pad)
-                                    y1 = max(0, int((pt_h - bbox.t) * sy) - pad)
-                                    x2 = min(img_w, int(bbox.r * sx) + pad)
-                                    y2 = min(img_h, int((pt_h - bbox.b) * sy) + pad)
-                                    cropped = pil_img.crop((x1, y1, x2, y2))
-                                    buf = _io.BytesIO()
-                                    cropped.save(buf, format='PNG')
-                                    b64str = _b64.b64encode(buf.getvalue()).decode('utf-8')
-                                    code_block_images.append(f'data:image/png;base64,{b64str}')
-                                    break
+                                if FITZ_AVAILABLE:
+                                    try:
+                                        _pp_paras = _dodari_pp_paragraphs_from_pdf(file['path'], start_pg, end_pg)
+                                        _pp_soup  = BeautifulSoup(html_content, 'html.parser')
+                                        _pp_n     = _dodari_pp_presplit_soup(_pp_soup, _pp_paras)
+                                        if _pp_n:
+                                            html_content = str(_pp_soup)
+                                        print(f'[PDF chunk] {chunk_label} paragraph pre-split: {_pp_n} blocks split (PDF paragraphs: {len(_pp_paras)})')
+                                        del _pp_soup
+                                    except Exception as _pp_e:
+                                        print(f'[PDF chunk] paragraph pre-split skipped: {_pp_e}')
 
-                            pdf_doc.close()
-                            print(f'[PDF] {len(code_block_images)} code block image(s) cropped')
-                        except Exception as ce:
-                            import traceback as _tb
-                            print(f'[PDF] Code block image conversion error: {ce}')
-                            _tb.print_exc()
+                                if _dodari_resume_save_struct(
+                                    self.temp_folder_1, chunk_no, html_content,
+                                    picture_delete, picture_skip,
+                                    code_block_images, wide_table_images, formula_images
+                                ):
+                                    print(f'[Resume] PDF chunk {chunk_no} structure cached')
 
-                        WIDE_TABLE_COL_THRESHOLD = 5
-                        wide_table_images = {}
+                            soup_1 = BeautifulSoup(html_content, 'html.parser')
 
-                        try:
-                            pdf_doc_t = _pdfium.PdfDocument(file['path'])
-                            rendered_pages_t = {}
-                            table_idx = 0
+                            for i, pre in enumerate(soup_1.find_all('pre')):
+                                if i < len(code_block_images):
+                                    pre.replace_with(soup_1.new_tag('img', src=code_block_images[i],
+                                        style='display:block;max-width:100%;margin:1em 0;'))
+                            for i, table in enumerate(soup_1.find_all('table')):
+                                if i in wide_table_images:
+                                    table.replace_with(soup_1.new_tag('img', src=wide_table_images[i],
+                                        style='display:block;max-width:100%;margin:1.5em auto;border:1px solid #ddd;'))
+                                else:
+                                    table['style'] = ('width:100%;border-collapse:collapse;'
+                                                      'font-size:0.82em;word-break:break-word;table-layout:fixed;')
 
-                            for entry in result.document.iterate_items():
-                                item = entry[0] if isinstance(entry, (tuple, list)) else entry
-                                item_label = str(getattr(item, 'label', '')).upper()
-                                if 'TABLE' not in item_label:
-                                    continue
-
-                                col_count = 0
-                                table_data = getattr(item, 'data', None)
-                                if table_data is not None:
-                                    col_count = getattr(table_data, 'num_cols', 0)
-                                    if col_count == 0 and hasattr(table_data, 'grid') and table_data.grid:
-                                        col_count = len(table_data.grid[0]) if table_data.grid[0] else 0
-
-                                if col_count >= WIDE_TABLE_COL_THRESHOLD:
-                                    for prov in getattr(item, 'prov', []):
-                                        bbox = getattr(prov, 'bbox', None)
-                                        if bbox is None:
-                                            continue
-                                        page_no = prov.page_no
-                                        if page_no not in rendered_pages_t:
-                                            pdf_page = pdf_doc_t[page_no - 1]
-                                            pt_w = pdf_page.get_width()
-                                            pt_h = pdf_page.get_height()
-                                            bitmap = pdf_page.render(scale=2.0)
-                                            pil_img = bitmap.to_pil()
-                                            rendered_pages_t[page_no] = (pil_img, pt_w, pt_h)
-
-                                        pil_img, pt_w, pt_h = rendered_pages_t[page_no]
-                                        img_w, img_h = pil_img.size
-                                        sx = img_w / pt_w
-                                        sy = img_h / pt_h
-                                        pad = 8
-                                        x1 = max(0, int(bbox.l * sx) - pad)
-                                        y1 = max(0, int((pt_h - bbox.t) * sy) - pad)
-                                        x2 = min(img_w, int(bbox.r * sx) + pad)
-                                        y2 = min(img_h, int((pt_h - bbox.b) * sy) + pad)
-                                        cropped = pil_img.crop((x1, y1, x2, y2))
-                                        buf = _io.BytesIO()
-                                        cropped.save(buf, format='PNG')
-                                        b64str = _b64.b64encode(buf.getvalue()).decode('utf-8')
-                                        wide_table_images[table_idx] = f'data:image/png;base64,{b64str}'
+                            if formula_images:
+                                _fm_idx = 0
+                                for _el in list(soup_1.find_all(['p', 'div', 'span', 'section'])):
+                                    if _fm_idx >= len(formula_images):
                                         break
+                                    if FORMULA_NOT_DECODED_RE.search(_el.get_text(separator=' ', strip=True)) and not _el.find(['p', 'div']):
+                                        _el.replace_with(soup_1.new_tag('img', src=formula_images[_fm_idx],
+                                            style='display:block;max-width:100%;margin:1em auto;'))
+                                        _fm_idx += 1
 
-                                table_idx += 1
+                            tags_1             = soup_1.find_all(target_tags)
+                            only_texts         = []
+                            whole_particle     = []
+                            valid_tags_1       = []
+                            valid_indices      = []
+                            decompose_indices  = []
+                            skip_style_indices = []
 
-                            pdf_doc_t.close()
-                            print(f'[PDF] {len(wide_table_images)} wide table image(s) cropped (total tables: {table_idx})')
-
-                        except Exception as te:
-                            import traceback as _tb
-                            print(f'[PDF] Wide table image conversion error: {te}')
-                            wide_table_images = {}
-                            _tb.print_exc()
-
-                        formula_images = []
-                        try:
-                            pdf_doc_fm = _pdfium.PdfDocument(file['path'])
-                            rendered_pages_fm = {}
-                            for entry in result.document.iterate_items():
-                                item = entry[0] if isinstance(entry, (tuple, list)) else entry
-                                if 'FORMULA' not in str(getattr(item, 'label', '')).upper():
+                            for t_idx, tag_1 in enumerate(tags_1):
+                                if any(tag_1.find(bt) for bt in block_tag_names):
                                     continue
-                                for prov in getattr(item, 'prov', []):
-                                    bbox = getattr(prov, 'bbox', None)
-                                    if bbox is None:
+                                if tag_1.find_parent('figure') or tag_1.find('img'):
+                                    continue
+                                text = tag_1.get_text(separator=' ').strip()
+                                if picture_delete and text in picture_delete:
+                                    tag_1.decompose()
+                                    decompose_indices.append(t_idx)
+                                    continue
+                                if picture_skip and text in picture_skip:
+                                    tag_1['style'] = 'font-style:italic;text-align:center;margin-top:2px;font-size:0.9em;'
+                                    skip_style_indices.append(t_idx)
+                                    continue
+                                if re.match(r'^\d+\s+https?://', text):
+                                    continue
+                                if re.search(r'\.{3,}\s*\d+\s*$', text):
+                                    continue
+                                if len(text) > 1 and any(c.isalpha() for c in text):
+                                    raw_sentences = nltk.sent_tokenize(text)
+                                    sentences = [s for s in raw_sentences if sum(1 for c in s if c.isalpha()) >= 2]
+                                    if not sentences:
                                         continue
-                                    page_no = prov.page_no
-                                    if page_no not in rendered_pages_fm:
-                                        pdf_page = pdf_doc_fm[page_no - 1]
-                                        pt_w = pdf_page.get_width()
-                                        pt_h = pdf_page.get_height()
-                                        pil_img = pdf_page.render(scale=2.0).to_pil()
-                                        rendered_pages_fm[page_no] = (pil_img, pt_w, pt_h)
-                                    pil_img, pt_w, pt_h = rendered_pages_fm[page_no]
-                                    img_w, img_h = pil_img.size
-                                    sx = img_w / pt_w
-                                    sy = img_h / pt_h
-                                    pad = 8
-                                    x1 = max(0, int(bbox.l * sx) - pad)
-                                    y1 = max(0, int((pt_h - bbox.t) * sy) - pad)
-                                    x2 = min(img_w, int(bbox.r * sx) + pad)
-                                    y2 = min(img_h, int((pt_h - bbox.b) * sy) + pad)
-                                    cropped = pil_img.crop((x1, y1, x2, y2))
-                                    buf = _io.BytesIO()
-                                    cropped.save(buf, format='PNG')
-                                    formula_images.append(f'data:image/png;base64,{_b64.b64encode(buf.getvalue()).decode()}')
-                                    break
-                            pdf_doc_fm.close()
-                            print(f'[PDF] {len(formula_images)} formula image(s) cropped')
-                        except Exception as fe:
-                            import traceback as _tb
-                            print(f'[PDF] Formula image conversion error: {fe}')
-                            _tb.print_exc()
+                                    only_texts.extend(sentences)
+                                    p_with_marker = list(sentences)
+                                    p_with_marker.append(0)
+                                    whole_particle.extend(p_with_marker)
+                                    valid_tags_1.append(tag_1)
+                                    valid_indices.append(t_idx)
 
-                        html_content = result.document.export_to_html(image_mode=ImageRefMode.EMBEDDED)
-
-                        if _dodari_resume_save_struct(
-                            self.temp_folder_1, 0, html_content,
-                            picture_delete, picture_skip,
-                            code_block_images, wide_table_images, formula_images
-                        ):
-                            print('[Resume] PDF structure cached')
-                    print('[PDF Translation] HTML structure complete. Starting text translation pipeline (BeautifulSoup)...')
-
-                    soup_1 = BeautifulSoup(html_content, 'html.parser')
-                    soup_2 = BeautifulSoup(html_content, 'html.parser')
-
-                    for soup_obj in [soup_1, soup_2]:
-                        pre_tags = soup_obj.find_all('pre')
-                        for i, pre in enumerate(pre_tags):
-                            if i < len(code_block_images):
-                                img_tag = soup_obj.new_tag(
-                                    'img',
-                                    src=code_block_images[i],
-                                    style='display:block;max-width:100%;margin:1em 0;'
+                            assembled_1 = []
+                            assembled_2 = []
+                            if only_texts:
+                                progress(
+                                    chunk_no / num_chunks * 0.6 + 0.3 / num_chunks,
+                                    desc=f'[PDF] {chunk_label} translating... (elapsed: {format_korean_time(int(time.time() - self.start))})'
                                 )
-                                pre.replace_with(img_tag)
-                            else:
-                                pass
-
-                    for soup_obj in [soup_1, soup_2]:
-                        table_tags = soup_obj.find_all('table')
-                        for i, table in enumerate(table_tags):
-                            if i in wide_table_images:
-                                img_tag = soup_obj.new_tag(
-                                    'img',
-                                    src=wide_table_images[i],
-                                    style='display:block;max-width:100%;margin:1.5em auto;border:1px solid #ddd;'
+                                parti_1, parti_2 = self.resumable_translate(
+                                    only_texts, whole_particle, 'epub', genre_val, tone_val, bilingual_order_val,
+                                    self.temp_folder_1, file['orig_name'], resume_settings, resume_done,
+                                    None, f'pdf{chunk_no}_'
                                 )
-                                table.replace_with(img_tag)
-                            else:
-                                table['style'] = (
-                                    'width:100%;border-collapse:collapse;'
-                                    'font-size:0.82em;word-break:break-word;'
-                                    'table-layout:fixed;'
-                                )
-
-                    if formula_images:
-                        _fm_re = re.compile(r'formula\s+not\s+decoded', re.IGNORECASE)
-                        for soup_obj in [soup_1, soup_2]:
-                            _fm_idx = 0
-                            for _el in list(soup_obj.find_all(['p', 'div', 'span', 'section'])):
-                                if _fm_idx >= len(formula_images):
-                                    break
-                                if _fm_re.search(_el.get_text(separator=' ', strip=True)) and not _el.find(['p', 'div']):
-                                    _el.replace_with(soup_obj.new_tag('img', src=formula_images[_fm_idx],
-                                        style='display:block;max-width:100%;margin:1em auto;'))
-                                    _fm_idx += 1
-
-                    block_tag_names = {'p', 'div', 'li', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'figcaption'}
-                    target_tags = list(block_tag_names)
-                    tags_1 = soup_1.find_all(target_tags)
-                    tags_2 = soup_2.find_all(target_tags)
-
-                    only_texts = []
-                    whole_particle = []
-                    valid_tags_1 = []
-                    valid_tags_2 = []
-
-                    for t_idx, tag_1 in enumerate(tags_1):
-                        if any(tag_1.find(bt) for bt in block_tag_names):
-                            continue
-                        if tag_1.find_parent('figure') or tag_1.find('img'):
-                            continue
-
-                        text = tag_1.get_text(separator=' ').strip()
-                        if picture_delete and text in picture_delete:
-                            tag_1.decompose()
-                            tags_2[t_idx].decompose()
-                            continue
-                        if picture_skip and text in picture_skip:
-                            for s_tag in [tag_1, tags_2[t_idx]]:
-                                s_tag['style'] = 'font-style:italic;text-align:center;margin-top:2px;font-size:0.9em;'
-                            continue
-                        if re.match(r'^\d+\s+https?://', text):
-                            continue
-                        if len(text) > 1 and any(c.isalpha() for c in text):
-                            raw_sentences = nltk.sent_tokenize(text)
-                            sentences = [s for s in raw_sentences if sum(1 for c in s if c.isalpha()) >= 2]
-                            if not sentences:
-                                continue
-                            only_texts.extend(sentences)
-
-                            p_with_marker = list(sentences)
-                            p_with_marker.append(0)
-                            whole_particle.extend(p_with_marker)
-
-                            valid_tags_1.append(tag_1)
-                            valid_tags_2.append(tags_2[t_idx])
-                            
-                    if only_texts:
-                        progress(0.7, desc=f'[PDF] Batch translating text... ({format_korean_time(int(time.time() - self.start))} elapsed)')
-                        parti_1, parti_2 = self.resumable_translate(
-                            only_texts, whole_particle, 'epub', genre_val, tone_val, bilingual_order_val,
-                            self.temp_folder_1, file['orig_name'], resume_settings, resume_done, progress
-                        )
-
-                        assembled_1 = []
-                        assembled_2 = []
-                        translated_str_1 = ''
-                        translated_str_2 = ''
-                        
-                        for p_1, p_2 in zip(parti_1, parti_2):
-                            if p_1:
-                                translated_str_1 += ' ' + p_1
-                                translated_str_2 += ' ' + p_2
-                            else:
-                                assembled_1.append(translated_str_1.strip())
-                                assembled_2.append(translated_str_2.strip())
                                 translated_str_1 = ''
                                 translated_str_2 = ''
-                        
-                        for t_idx, valid_tag_1 in enumerate(progress.tqdm(valid_tags_1, desc='HTML Reassembly')):
-                            trans_1 = assembled_1[t_idx]
-                            trans_2 = assembled_2[t_idx]
-                            
-                            _dodari_set_block(valid_tag_1, trans_1, 'bi', soup_1)
-                            _dodari_set_block(valid_tags_2[t_idx], trans_2, 'mono', soup_2)
-                            
-                    progress(0.95, desc=f'[PDF] EPUB packaging... (elapsed: {format_korean_time(int(time.time() - self.start))})')
-                    if bilingual_order_val == "원문(번역문)":
-                        done_path_1 = os.path.join(self.output_folder, f"{name}_{origin_abb}({target_abb}).epub")
-                    else:
-                        done_path_1 = os.path.join(self.output_folder, f"{name}_{target_abb}({origin_abb}).epub")
-                    done_path_2 = os.path.join(self.output_folder, f"{name}_{target_abb}.epub")
+                                for p_1, p_2 in zip(parti_1, parti_2):
+                                    if p_1:
+                                        translated_str_1 += ' ' + p_1
+                                        translated_str_2 += ' ' + p_2
+                                    else:
+                                        assembled_1.append(translated_str_1.strip())
+                                        assembled_2.append(translated_str_2.strip())
+                                        translated_str_1 = ''
+                                        translated_str_2 = ''
+                                for t_idx, valid_tag_1 in enumerate(valid_tags_1):
+                                    _dodari_set_block(valid_tag_1, assembled_1[t_idx] if t_idx < len(assembled_1) else '', 'bi', soup_1)
 
-                    self.build_epub_from_soup(soup_1, done_path_1, name, lang_code=target_abb)
-                    self.build_epub_from_soup(soup_2, done_path_2, name, lang_code=target_abb)
+                            global_img_1, chap_1 = self._add_soup_chapter_to_book(
+                                soup_1, book_1, chunk_no, global_img_1, css_1, target_abb
+                            )
+                            chapters_1.append(chap_1)
+                            del soup_1, tags_1, valid_tags_1
+                            gc.collect()
+                            print(f'[PDF chunk] {chunk_label} soup_1 done')
+
+                            soup_2 = BeautifulSoup(html_content, 'html.parser')
+                            del html_content
+                            gc.collect()
+
+                            for i, pre in enumerate(soup_2.find_all('pre')):
+                                if i < len(code_block_images):
+                                    pre.replace_with(soup_2.new_tag('img', src=code_block_images[i],
+                                        style='display:block;max-width:100%;margin:1em 0;'))
+                            for i, table in enumerate(soup_2.find_all('table')):
+                                if i in wide_table_images:
+                                    table.replace_with(soup_2.new_tag('img', src=wide_table_images[i],
+                                        style='display:block;max-width:100%;margin:1.5em auto;border:1px solid #ddd;'))
+                                else:
+                                    table['style'] = ('width:100%;border-collapse:collapse;'
+                                                      'font-size:0.82em;word-break:break-word;table-layout:fixed;')
+
+                            if formula_images:
+                                _fm_idx2 = 0
+                                for _el in list(soup_2.find_all(['p', 'div', 'span', 'section'])):
+                                    if _fm_idx2 >= len(formula_images):
+                                        break
+                                    if FORMULA_NOT_DECODED_RE.search(_el.get_text(separator=' ', strip=True)) and not _el.find(['p', 'div']):
+                                        _el.replace_with(soup_2.new_tag('img', src=formula_images[_fm_idx2],
+                                            style='display:block;max-width:100%;margin:1em auto;'))
+                                        _fm_idx2 += 1
+
+                            tags_2 = soup_2.find_all(target_tags)
+                            for i in decompose_indices:
+                                if i < len(tags_2):
+                                    tags_2[i].decompose()
+                            for i in skip_style_indices:
+                                if i < len(tags_2):
+                                    tags_2[i]['style'] = 'font-style:italic;text-align:center;margin-top:2px;font-size:0.9em;'
+                            valid_tags_2 = [tags_2[i] for i in valid_indices if i < len(tags_2)]
+                            if assembled_2:
+                                for t_idx, valid_tag_2 in enumerate(valid_tags_2):
+                                    _dodari_set_block(valid_tag_2, assembled_2[t_idx] if t_idx < len(assembled_2) else '', 'mono', soup_2)
+
+                            global_img_2, chap_2 = self._add_soup_chapter_to_book(
+                                soup_2, book_2, chunk_no, global_img_2, css_2, target_abb
+                            )
+                            chapters_2.append(chap_2)
+                            del soup_2, tags_2, valid_tags_2
+                            gc.collect()
+                            print(f'[PDF chunk] {chunk_label} done')
+
+                    except Exception:
+                        raise
+
+                    progress(0.95, desc=f'[PDF] EPUB packaging... (elapsed: {format_korean_time(int(time.time() - self.start))})')
+                    self._finalize_epub_book(book_1, chapters_1, done_path_1, name)
+                    self._finalize_epub_book(book_2, chapters_2, done_path_2, name)
+
+                    try:
+                        _pdf_llm = self._translate_pdf_meta_to_book(
+                            book_1, book_2, _pdf_meta, target_lang_name
+                        )
+                    except Exception as _me:
+                        print(f'[META] PDF meta translation failed: {_me}')
 
                     all_file_path.extend([done_path_1, done_path_2])
-                    print(f'[PDF Translation] Success! EPUB created: {done_path_1}, {done_path_2}')
+                    print(f'[PDF] Success! EPUB created: {done_path_1}, {done_path_2}')
                     _dodari_resume_cleanup(self.temp_folder_1)
 
-                except DodariCliError as err:
-                    print(f'[PDF Translation] CLI engine stopped: {err}')
-                    print('[Resume] Progress is preserved, rerun to continue.')
-                    continue
                 except Exception as err:
                     import traceback
-                    print(f'[PDF Translation] Error: {err}')
+                    print(f'[PDF] Error: {err}')
                     traceback.print_exc()
+                    print('[PDF] Progress is preserved, rerun to resume.')
                     continue
 
             else:
@@ -3031,7 +3346,7 @@ class Dodari:
         if _dodari_cli_is_engine(self.gemma_model):
             try:
                 out = self.request_cli_batch([text], genre_val, tone_val)
-                return out[0] if out else text
+                return (out[0] or text) if out else text
             except DodariCliRateLimitError:
                 raise
             except DodariCliError as err:
@@ -3044,7 +3359,10 @@ class Dodari:
             f"Translate the following text into {self.target_lang_prompt}. "
             f"{genre_instruction}"
             f"{tone_instruction}"
-            f"Output only the translation, nothing else.\n\n{text}"
+            f"Output only the translation, nothing else. "
+            f"Even if the text is a fragment, incomplete, or unreadable, translate it "
+            f"as literally as possible. Never write remarks about the text and never "
+            f"add parenthetical notes of your own.\n\n{text}"
         )
         payload = {
             "model": self.gemma_model,
@@ -3062,7 +3380,8 @@ class Dodari:
                 timeout=120,
             )
             response.raise_for_status()
-            return response.json()['choices'][0]['message']['content'].strip()
+            raw = response.json()['choices'][0]['message']['content'].strip()
+            return _dodari_strip_translator_notes(raw) or text
         except Exception as err:
             print(f'Single API call failed: {err}')
             return text
@@ -3085,16 +3404,19 @@ class Dodari:
         if current_num is not None:
             result[current_num] = ' '.join(buffer).strip()
 
-        return [result.get(i + 1, '') for i in range(expected_count)]
+        return [_dodari_strip_translator_notes(result.get(i + 1, '')) for i in range(expected_count)]
+
+    def _glossary_instruction(self) -> str:
+        if not self.user_glossary:
+            return ''
+        terms = ', '.join(f'"{src}" → "{tgt}"' for src, tgt in self.user_glossary.items())
+        return f'TERMINOLOGY (Strictly enforce — no exceptions): {terms}. '
 
     def build_cli_system_prompt(self, genre_val: str, tone_val: str = "서술체 (~다)") -> str:
         genre_instruction = self.get_genre_prompt_extension(genre_val)
         tone_instruction = self.get_tone_prompt_extension(tone_val)
 
-        glossary_instruction = ''
-        if self.user_glossary:
-            terms = ', '.join(f'"{src}" → "{tgt}"' for src, tgt in self.user_glossary.items())
-            glossary_instruction = f'TERMINOLOGY (Strictly enforce — no exceptions): {terms}. '
+        glossary_instruction = self._glossary_instruction()
 
         return (
             f"You are a professional translator. "
@@ -3105,7 +3427,11 @@ class Dodari:
             f'Return a JSON object with a "translations" array containing exactly one '
             f"translated string per input sentence, in the same order. "
             f"Do not merge, split, skip, or reorder sentences. "
-            f"Do not add any explanation or extra text."
+            f"Do not add any explanation or extra text. "
+            f"Every array item must contain only the translation of that sentence. "
+            f"Even if a sentence is a fragment, duplicated, incomplete, or unreadable, "
+            f"translate it as literally as possible. Never write remarks about a sentence, "
+            f"never refer to other sentence numbers, and never add parenthetical notes of your own."
         )
 
     def request_cli_batch(self, texts: list, genre_val: str, tone_val: str = "서술체 (~다)") -> list:
@@ -3126,7 +3452,10 @@ class Dodari:
             print(f'  [CLI Engine] failed: {err}', flush=True)
             raise
         print(f'  [CLI Engine] {self.gemma_model} batch of {len(texts)} done in {time.time() - t0:.1f}s', flush=True)
-        return result
+        return [
+            _dodari_strip_translator_notes(r) or (texts[i] if i < len(texts) else r)
+            for i, r in enumerate(result)
+        ]
 
     def request_gemma_api_batch(self, texts: list, genre_val: str, tone_val: str = "서술체 (~다)") -> list:
         if not texts:
@@ -3138,10 +3467,7 @@ class Dodari:
         genre_instruction = self.get_genre_prompt_extension(genre_val)
         tone_instruction = self.get_tone_prompt_extension(tone_val)
 
-        glossary_instruction = ''
-        if self.user_glossary:
-            terms = ', '.join(f'"{src}" → "{tgt}"' for src, tgt in self.user_glossary.items())
-            glossary_instruction = f'TERMINOLOGY (Strictly enforce — no exceptions): {terms}. '
+        glossary_instruction = self._glossary_instruction()
 
         numbered_input = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
         prompt = (
@@ -3150,7 +3476,12 @@ class Dodari:
             f"{genre_instruction}"
             f"{tone_instruction}"
             f"Return ONLY the numbered translations in exactly the same format (1. 2. 3. ...). "
-            f"Do not add any explanation or extra text.\n\n{numbered_input}"
+            f"Do not add any explanation or extra text. "
+            f"Every numbered item must contain only the translation of that sentence. "
+            f"Even if a sentence is a fragment, duplicated, incomplete, or unreadable, "
+            f"translate it as literally as possible. Never write remarks about a sentence, "
+            f"never refer to other sentence numbers, never merge or skip items, "
+            f"and never add parenthetical notes of your own.\n\n{numbered_input}"
         )
         batch_max_tokens = min(self.max_len * len(texts), 1024)
         
@@ -3209,8 +3540,8 @@ class Dodari:
         print(f'  [Batch {idx+1}/{total_chunks}] Done {elapsed:.1f}s | → "{first_out}..."')
         return result
 
-    def translate_sentence_block(self, only_texts, genre_val="일반 문서(기본)", tone_val="서술체 (~다)"):
-        processed_texts = list(only_texts)
+    def translate_sentence_block(self, sentences, genre_val="일반 문서(기본)", tone_val="서술체 (~다)"):
+        processed_texts = list(sentences)
 
         from concurrent.futures import ThreadPoolExecutor
 
@@ -3509,24 +3840,21 @@ class Dodari:
             os.makedirs(folder_path, exist_ok=True)
             zip_module.extractall(folder_path)
             zip_module.close()
-        except:
-            print('Invalid EPUB file')
-            pass
+            return True
+        except Exception as err:
+            print(f'[EPUB] Invalid or unreadable EPUB file: {epub_file}')
+            print(f'[EPUB] Reason: {err}')
+            return False
 
     def repack_epub_contents(self, folder_path: PathType, epub_name: PathType):
         try:
             zip_module = zipfile.ZipFile(epub_name, 'w', zipfile.ZIP_DEFLATED)
-            _skip_dirs = (RESUME_CHUNK_DIR, RESUME_STRUCT_DIR)
             for root, dirs, files in os.walk(folder_path):
-                for _sd in _skip_dirs:
-                    if _sd in dirs:
-                        dirs.remove(_sd)
+                _dodari_prune_resume_dirs(dirs)
                 for file in files:
                     file_path = os.path.join(root, file)
                     rel_path = os.path.relpath(file_path, folder_path)
-                    if rel_path == RESUME_SNAPSHOT_NAME:
-                        continue
-                    if any(rel_path.startswith(_sd + os.sep) for _sd in _skip_dirs):
+                    if rel_path == RESUME_SNAPSHOT_NAME or _dodari_is_resume_cache_path(rel_path):
                         continue
                     zip_module.write(file_path, rel_path)
             zip_module.close()
@@ -3538,11 +3866,9 @@ class Dodari:
     def list_epub_html_files(self) -> List:
         file_path = []
         for root, dirs, files in os.walk(self.temp_folder_1):
-            for _sd in (RESUME_CHUNK_DIR, RESUME_STRUCT_DIR):
-                if _sd in dirs:
-                    dirs.remove(_sd)
+            _dodari_prune_resume_dirs(dirs)
             for file in files:
-                if file.endswith(('xhtml', 'html', 'htm')):
+                if file.lower().endswith(('xhtml', 'html', 'htm')):
                     file_path.append(os.path.join(root, file))
         return file_path
 
@@ -3550,7 +3876,7 @@ class Dodari:
         opf_path = None
         for root, _, files in os.walk(self.temp_folder_1):
             for file in files:
-                if file.endswith('opf'):
+                if file.lower().endswith('opf'):
                     opf_path = os.path.join(root, file)
                     return opf_path
 
@@ -3639,6 +3965,169 @@ class Dodari:
 
         epub.write_epub(epub_path, book, {})
         print(f'[EPUB] Packaging complete: {epub_path}')
+
+    def _ask_llm(self, prompt: str, max_tokens: int = 400) -> str:
+        if _dodari_cli_is_engine(self.gemma_model):
+            return _dodari_cli_ask(self.gemma_model, prompt)
+
+        payload = {
+            'model': self.gemma_model,
+            'messages': [{'role': 'user', 'content': prompt}],
+            'max_tokens': max_tokens,
+            'temperature': 0.3,
+        }
+        resp = requests.post(self.gemma_api_url, json=payload,
+                             headers={'Content-Type': 'application/json'}, timeout=60)
+        resp.raise_for_status()
+        return resp.json()['choices'][0]['message']['content'].strip()
+
+    ZLIBRARY_CATEGORIES = (
+        'Programming, Artificial Intelligence, Computer Business & Culture, '
+        'General & Miscellaneous Biography, Business & Economics, '
+        'Science (General), Fiction, Self-Help, History, Psychology, '
+        'Education Studies & Teaching, Medicine, Mathematics, Engineering, '
+        'Society Politics & Philosophy, Nature Animals & Pets, Others'
+    )
+
+    def _ask_meta_translation(self, book_line: str, en_desc: str, target_lang_name: str) -> dict:
+        prompt = (
+            f'{book_line}\n'
+            f'English description: {en_desc[:300]}\n'
+            f'Target language: {target_lang_name}\n\n'
+            f'Respond in JSON only:\n'
+            f'{{"title_ko": "<{target_lang_name} title>", '
+            f'"description_ko": "<2-3 sentence {target_lang_name} description>", '
+            f'"category": "<best subcategory from: {self.ZLIBRARY_CATEGORIES}>"}}'
+        )
+        raw = self._ask_llm(prompt, max_tokens=400)
+        raw = _dodari_cli_strip_fence(raw)
+        return json.loads(raw)
+
+    def _merge_bilingual_description(self, desc_ko: str, en_desc: str) -> str:
+        return f'{desc_ko}\n---\n{en_desc}' if (desc_ko and en_desc) else (desc_ko or en_desc)
+
+    def _translate_pdf_meta_to_book(self, book_1, book_2, pdf_meta: dict, target_lang: str) -> None:
+        en_title = pdf_meta.get('title', '')
+        en_desc  = pdf_meta.get('subject', '')
+        author   = pdf_meta.get('author', '').rstrip(';,').strip()
+
+        try:
+            result = self._ask_meta_translation(f'Book: "{en_title}" by {author}', en_desc, target_lang)
+        except Exception as e:
+            print(f'[META] LLM translation failed: {e}')
+            result = {}
+
+        title_ko = result.get('title_ko', '')
+        desc_ko  = result.get('description_ko', '')
+        category = result.get('category', '')
+        new_title = f'{title_ko} [{en_title}]' if title_ko else en_title
+        new_desc  = self._merge_bilingual_description(desc_ko, en_desc)
+
+        for book in [book_1, book_2]:
+            if new_title:
+                book.set_title(new_title)
+            if author:
+                book.add_author(author)
+            if new_desc:
+                book.add_metadata('DC', 'description', new_desc)
+            if category:
+                book.add_metadata(None, 'meta', None, {'name': 'zlibrary:category', 'content': category})
+        print(f'[META] PDF meta injected into book: {new_title[:40]}')
+
+    def _clean_author(self, raw: str) -> str:
+        parts = [p.strip().rstrip(';') for p in raw.split(';') if p.strip().rstrip(';')]
+        cleaned = []
+        for p in parts:
+            if ',' in p:
+                last, first = [x.strip() for x in p.split(',', 1)]
+                cleaned.append(f'{first} {last}')
+            else:
+                cleaned.append(p)
+        return ', '.join(cleaned)
+
+    def _inject_pdf_meta(self, book, pdf_meta: dict, cover_bytes: bytes | None, cover_ext: str) -> None:
+        author_raw = pdf_meta.get('author', '').strip()
+        if author_raw:
+            book.add_author(self._clean_author(author_raw))
+
+        subject = pdf_meta.get('subject', '').strip()
+        if subject:
+            book.add_metadata('DC', 'description', subject)
+
+        keywords = pdf_meta.get('keywords', '').strip()
+        if keywords:
+            book.add_metadata('DC', 'subject', keywords)
+
+        if cover_bytes:
+            cover_fname = f'images/cover.{cover_ext}'
+            book.set_cover(cover_fname, cover_bytes)
+            print(f'[EPUB] Cover image injected ({cover_ext})')
+
+    def _init_epub_book(self, title: str, lang_code: str):
+        book = epub.EpubBook()
+        book.set_identifier(f'dodari-pdf-{int(time.time())}')
+        book.set_title(title)
+        book.set_language(lang_code)
+        css_content = (
+            'body { font-family: serif; line-height: 1.8; margin: 2em; }\n'
+            'h1, h2, h3, h4, h5, h6 { font-family: sans-serif; }\n'
+            'img { max-width: 100%; height: auto; display: block; margin: 1em auto; }\n'
+            'pre { background: #f4f4f4; padding: 1em; overflow-x: auto; font-size: 0.85em; }\n'
+            'figcaption { font-style: italic; text-align: center; font-size: 0.9em; }\n'
+        )
+        css_item = epub.EpubItem(
+            uid='style_main',
+            file_name='styles/main.css',
+            media_type='text/css',
+            content=css_content.encode('utf-8')
+        )
+        book.add_item(css_item)
+        return book, css_item
+
+    def _add_soup_chapter_to_book(self, soup, book, chap_idx: int, img_idx: int, css_item, lang_code: str):
+        for img_tag in soup.find_all('img'):
+            src = img_tag.get('src', '')
+            if not src.startswith('data:image/'):
+                continue
+            try:
+                header, b64data = src.split(',', 1)
+                mime_match = re.search(r'data:(image/\w+);base64', header)
+                if not mime_match:
+                    continue
+                mime = mime_match.group(1)
+                ext  = mime.split('/')[1]
+                img_filename = f'images/img_{img_idx:05d}.{ext}'
+                book.add_item(epub.EpubItem(
+                    uid=f'img_{img_idx:05d}',
+                    file_name=img_filename,
+                    media_type=mime,
+                    content=base64.b64decode(b64data)
+                ))
+                img_tag['src'] = img_filename
+                img_idx += 1
+            except Exception as e:
+                print(f'[EPUB] Image extraction failed (img_{img_idx:05d}): {e}')
+                img_tag.decompose()
+
+        body_content = str(soup.body) if soup.body else str(soup)
+        chapter = epub.EpubHtml(
+            title=f'Part {chap_idx + 1}',
+            file_name=f'chap_{chap_idx:03d}.xhtml',
+            lang=lang_code
+        )
+        chapter.content = body_content
+        chapter.add_item(css_item)
+        book.add_item(chapter)
+        print(f'[EPUB] Chapter chap_{chap_idx:03d}.xhtml added (total images: {img_idx})')
+        return img_idx, chapter
+
+    def _finalize_epub_book(self, book, chapters: list, epub_path: str, title: str) -> None:
+        book.toc   = [epub.Link(ch.file_name, ch.title, ch.id) for ch in chapters]
+        book.spine = ['nav'] + chapters
+        book.add_item(epub.EpubNcx())
+        book.add_item(epub.EpubNav())
+        epub.write_epub(epub_path, book, {})
+        print(f'[EPUB] Packaged: {epub_path}')
 
     def finalize_file_streams(self, book, output_file_1, output_file_2):
         book.close()

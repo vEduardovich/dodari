@@ -188,6 +188,9 @@ Control Panel → Programs → Uninstall Ollama
 * 2026.06.12 Optimized Ubuntu GPU memory settings. Fixed translation crashes caused by VRAM conflicts with monitor/desktop environments.
 * 2026.06.14 Expanded EPUB translation tag coverage.
 * 2026.06.25 PDF dialogue books now split into per-speaker paragraphs, restoring line breaks.
+* 2026.07.31 Interrupted translations now resume from where they left off.
+* 2026.08.01 Claude and ChatGPT (Codex) subscribers can now translate with their own subscription models via the official CLIs.
+* 2026.08.11 Much faster PDF chunk processing by skipping OCR for text-based PDFs. Fixed Gemma4 adding translator notes to translations.
 <br/>
 
 ---

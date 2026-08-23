@@ -191,6 +191,7 @@ ollama rm gemma4:31b
 * 2026.08.01 클로드·ChatGPT(코덱스) 구독자는 본인 구독 모델로 번역 가능 (공식 CLI 사용)
 * 2026.08.11 텍스트 기반 PDF의 OCR 생략으로 청크속도 크게 향상, Gemma4 번역시 주석추가 오류 수정
 * 2026.08.13 문장분리 라이브러리(NLTK) 보안 취약점 패치 버전으로 업데이트 with [Xuuyuan](https://github.com/Xuuyuan)
+* 2026.08.24 우분투 멀티 GPU(텐서 병렬) 지원 추가(VLLM_TP), 양자화 선택 가능(VLLM_QUANT) with [polbel11](https://github.com/polbel11)
 <br/>
 
 ## 개발 뒷이야기

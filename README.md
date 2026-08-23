@@ -192,6 +192,7 @@ Control Panel → Programs → Uninstall Ollama
 * 2026.08.01 Claude and ChatGPT (Codex) subscribers can now translate with their own subscription models via the official CLIs.
 * 2026.08.11 Much faster PDF chunk processing by skipping OCR for text-based PDFs. Fixed Gemma4 adding translator notes to translations.
 * 2026.08.13 Updated the sentence-splitting library (NLTK) to a version that patches security advisories with [Xuuyuan](https://github.com/Xuuyuan)
+* 2026.08.24 Added multi-GPU tensor parallelism support on Ubuntu (VLLM_TP) and selectable quantization (VLLM_QUANT) with [polbel11](https://github.com/polbel11)
 <br/>
 
 ---

@@ -60,6 +60,25 @@ def _dodari_mark_llm_started():
     global _dodari_llm_server_started
     _dodari_llm_server_started = True
 
+VLLM_DEFAULT_QUANT = 'compressed-tensors'
+
+def _dodari_vllm_server_cmd(python_exe, model, gpu_mem_util, max_model_len, tensor_parallel='1', quantization=VLLM_DEFAULT_QUANT):
+    tp = str(tensor_parallel).strip() or '1'
+    quant = (quantization or '').strip()
+    quant_flag = f"--quantization {quant} " if quant.lower() not in ('', 'none', 'auto') else ''
+    return (
+        f"{python_exe} -m vllm.entrypoints.openai.api_server "
+        f"--model {model} "
+        + quant_flag +
+        f"--dtype bfloat16 "
+        f"--tensor-parallel-size {tp} "
+        f"--gpu-memory-utilization {gpu_mem_util} "
+        f"--max-model-len {max_model_len} "
+        f"--max-num-seqs 16 "
+        '--limit-mm-per-prompt \'{"image": 0, "video": 0}\' '
+        f"--port 8000"
+    )
+
 def _dodari_cleanup_at_exit():
     if _dodari_llm_server_started:
         cleanup_llm_server()
@@ -2305,16 +2324,12 @@ class Dodari:
         elif current_platform == 'Linux':
             vllm_model = os.environ.get('VLLM_MODEL', 'cyankiwi/gemma-4-31B-it-AWQ-4bit')
             vllm_python = os.environ.get('VLLM_PYTHON', sys.executable)
-            cmd = (
-                f"{vllm_python} -m vllm.entrypoints.openai.api_server "
-                f"--model {vllm_model} "
-                f"--quantization compressed-tensors "
-                f"--dtype bfloat16 "
-                f"--gpu-memory-utilization 0.90 "
-                f"--max-model-len 3072 "
-                f"--max-num-seqs 16 "
-                '--limit-mm-per-prompt \'{"image": 0, "video": 0}\' '
-                f"--port 8000"
+            cmd = _dodari_vllm_server_cmd(
+                vllm_python, vllm_model,
+                gpu_mem_util='0.90',
+                max_model_len='3072',
+                tensor_parallel=os.environ.get('VLLM_TP', '1'),
+                quantization=os.environ.get('VLLM_QUANT', VLLM_DEFAULT_QUANT),
             )
             print(f"[Model Switch] Linux(vLLM) model: {vllm_model}")
             subprocess.Popen(cmd, shell=True)

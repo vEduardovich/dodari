@@ -131,12 +131,23 @@ echo "vLLM Python path: $VLLM_PYTHON"
 # Prevent memory fragmentation — reuse PyTorch reserved memory without fragmentation
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
+# Multi-GPU: set VLLM_TP to the number of GPUs (tensor parallelism, issue #17)
+# Unquantized (e.g. BF16) models: set VLLM_QUANT=none so vLLM auto-detects from the model config
+export VLLM_TP="${VLLM_TP:-1}"
+export VLLM_QUANT="${VLLM_QUANT:-compressed-tensors}"
+
+QUANT_OPT=""
+if [ -n "$VLLM_QUANT" ] && [ "$VLLM_QUANT" != "none" ] && [ "$VLLM_QUANT" != "auto" ]; then
+    QUANT_OPT="--quantization $VLLM_QUANT"
+fi
+
 # Start vLLM server (logs printed directly to terminal)
 dodari_env/bin/python3 -m vllm.entrypoints.openai.api_server \
     --model "$MODEL_PATH" \
     --served-model-name "$HF_MODEL_ID" \
-    --quantization compressed-tensors \
+    $QUANT_OPT \
     --dtype bfloat16 \
+    --tensor-parallel-size "$VLLM_TP" \
     --gpu-memory-utilization 0.90 \
     --max-model-len 3072 \
     --max-num-seqs 16 \

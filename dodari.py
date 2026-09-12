@@ -42,6 +42,7 @@ import gradio as gr
 import gc
 from xml.etree.ElementTree import parse
 import atexit
+import webbrowser
 
 def cleanup_llm_server():
     print("\n[SHUTDOWN] Shutting down LLM API server...")
@@ -59,6 +60,74 @@ _dodari_llm_server_started = False
 def _dodari_mark_llm_started():
     global _dodari_llm_server_started
     _dodari_llm_server_started = True
+
+MODEL_DOWNLOAD_SIZES = {
+    'mlx-community/gemma-4-e4b-it-8bit': '약 9GB',
+    'mlx-community/gemma-4-31b-it-4bit': '약 18GB',
+    'mlx-community/gemma-4-31b-it-8bit': '약 34GB',
+}
+MODEL_SWITCH_TIMEOUT_SEC = 6 * 3600
+
+def _dodari_hf_cached_snapshot(model_id, cache_dir=None):
+    if not model_id or '/' not in model_id:
+        return None
+    if cache_dir is None:
+        cache_dir = os.environ.get('HF_HUB_CACHE') or os.path.join(
+            os.environ.get('HF_HOME', os.path.expanduser('~/.cache/huggingface')), 'hub'
+        )
+    repo_dir = os.path.join(cache_dir, 'models--' + model_id.replace('/', '--'))
+    try:
+        with open(os.path.join(repo_dir, 'refs', 'main'), encoding='utf-8') as fp:
+            sha = fp.read().strip()
+    except OSError:
+        return None
+    snap = os.path.join(repo_dir, 'snapshots', sha)
+    if not os.path.isdir(snap):
+        return None
+    index_path = os.path.join(snap, 'model.safetensors.index.json')
+    if os.path.exists(index_path):
+        try:
+            with open(index_path, encoding='utf-8') as fp:
+                needed = set(json.load(fp).get('weight_map', {}).values())
+        except (OSError, ValueError):
+            return None
+    else:
+        needed = {'model.safetensors'}
+    needed.add('config.json')
+    for name in needed:
+        p = os.path.join(snap, name)
+        if not (os.path.exists(p) and os.path.exists(os.path.realpath(p))):
+            return None
+    return snap
+
+def _dodari_llm_server_env(model_id):
+    env = dict(os.environ)
+    if _dodari_hf_cached_snapshot(model_id):
+        env['HF_HUB_OFFLINE'] = '1'
+        return env, True
+    env.pop('HF_HUB_OFFLINE', None)
+    return env, False
+
+def _dodari_format_elapsed(seconds):
+    s = max(0, int(seconds))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f'{h}:{m:02d}:{sec:02d}'
+    return f'{m}:{sec:02d}'
+
+def _dodari_model_switch_message(T, state, model_short, elapsed_sec=0, cached=False, size_hint=''):
+    elapsed = _dodari_format_elapsed(elapsed_sec)
+    if state == 'stopping':
+        return f"<p style='color:#b8860b;'>{T('model_switch_stopping').format(model=model_short)}</p>"
+    if state == 'waiting':
+        key = 'model_switch_waiting_cached' if cached else 'model_switch_waiting_download'
+        return f"<p style='color:#b8860b;'>{T(key).format(model=model_short, elapsed=elapsed, size=size_hint or '?')}</p>"
+    if state == 'ready':
+        return f"<p style='color:green;'>{T('model_switch_ready').format(model=model_short, elapsed=elapsed)}</p>"
+    if state == 'died':
+        return f"<p style='color:red;'>{T('model_switch_died').format(model=model_short)}</p>"
+    return f"<p style='color:red;'>{T('model_switch_timeout').format(model=model_short, elapsed=elapsed)}</p>"
 
 VLLM_DEFAULT_QUANT = 'compressed-tensors'
 
@@ -389,6 +458,126 @@ CLI_LOGIN_HINTS = {
     ENGINE_CLAUDE_CLI: 'claude  (then run /login)',
     ENGINE_CODEX_CLI: 'codex login',
 }
+
+CLI_INSTALL_TIMEOUT_SEC = 15 * 60
+CLI_LOGIN_TIMEOUT_SEC = 10 * 60
+
+def _dodari_cli_install_cmd(engine, platform_name):
+    if engine == ENGINE_CLAUDE_CLI:
+        if platform_name == 'Windows':
+            return 'powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://claude.ai/install.ps1 | iex"'
+        return 'curl -fsSL https://claude.ai/install.sh | bash'
+    if engine == ENGINE_CODEX_CLI:
+        return 'npm install -g @openai/codex'
+    return None
+
+def _dodari_cli_login_cmd(engine, binary):
+    if engine == ENGINE_CLAUDE_CLI:
+        return f'{binary} auth login || {binary} /login'
+    if engine == ENGINE_CODEX_CLI:
+        return f'{binary} login'
+    return binary
+
+def _dodari_cli_extra_path_dirs(platform_name, home, env=None):
+    env = os.environ if env is None else env
+    if platform_name == 'Windows':
+        cands = [
+            os.path.join(home, '.local', 'bin'),
+            os.path.join(home, '.claude', 'bin'),
+            os.path.join(env.get('APPDATA', ''), 'npm') if env.get('APPDATA') else '',
+            os.path.join(env.get('LOCALAPPDATA', ''), 'Programs', 'nodejs') if env.get('LOCALAPPDATA') else '',
+            os.path.join(env.get('ProgramFiles', ''), 'nodejs') if env.get('ProgramFiles') else '',
+        ]
+    else:
+        cands = [
+            os.path.join(home, '.local', 'bin'),
+            os.path.join(home, '.claude', 'bin'),
+            os.path.join(home, '.claude', 'local'),
+            os.path.join(home, '.npm-global', 'bin'),
+            os.path.join(home, '.volta', 'bin'),
+            '/opt/homebrew/bin',
+            '/usr/local/bin',
+        ]
+        nvm = os.path.join(home, '.nvm', 'versions', 'node')
+        if os.path.isdir(nvm):
+            for v in sorted(os.listdir(nvm), reverse=True):
+                cands.append(os.path.join(nvm, v, 'bin'))
+    return [d for d in cands if d and os.path.isdir(d)]
+
+def _dodari_cli_refresh_path(platform_name=None):
+    platform_name = platform_name or platform.system()
+    current = os.environ.get('PATH', '').split(os.pathsep)
+    added = [d for d in _dodari_cli_extra_path_dirs(platform_name, os.path.expanduser('~')) if d not in current]
+    if added:
+        os.environ['PATH'] = os.pathsep.join(added + current)
+    return added
+
+def _dodari_cli_terminal_cmd(platform_name, command, available=None):
+    if platform_name == 'Darwin':
+        esc = command.replace('\\', '\\\\').replace('"', '\\"')
+        return ['osascript', '-e', f'tell application "Terminal" to do script "{esc}"', '-e', 'tell application "Terminal" to activate']
+    if platform_name == 'Windows':
+        return f'start "Dodari CLI login" cmd /k {command}'
+    which = shutil.which if available is None else available
+    for term in ('x-terminal-emulator', 'gnome-terminal', 'konsole', 'xfce4-terminal', 'xterm'):
+        if which(term):
+            if term == 'gnome-terminal':
+                return [term, '--', 'bash', '-lc', command]
+            return [term, '-e', f'bash -lc "{command}"']
+    return None
+
+def _dodari_cli_open_terminal(platform_name, command):
+    cmd = _dodari_cli_terminal_cmd(platform_name, command)
+    if cmd is None:
+        return False
+    try:
+        if isinstance(cmd, str):
+            subprocess.Popen(cmd, shell=True)
+        else:
+            subprocess.Popen(cmd)
+        return True
+    except Exception as err:
+        print(f'[CLI Setup] could not open a terminal window: {err}')
+        return False
+
+def _dodari_cli_parse_auth_status(engine, stdout, returncode):
+    if engine == ENGINE_CLAUDE_CLI:
+        try:
+            data = json.loads((stdout or '').strip() or 'null')
+        except ValueError:
+            data = None
+        if isinstance(data, dict) and 'loggedIn' in data:
+            return bool(data['loggedIn'])
+        return None
+    if engine == ENGINE_CODEX_CLI:
+        return returncode == 0
+    return None
+
+def _dodari_cli_auth_status(engine, binary):
+    if engine == ENGINE_CLAUDE_CLI:
+        args = [binary, 'auth', 'status', '--json']
+    elif engine == ENGINE_CODEX_CLI:
+        args = [binary, 'login', 'status']
+    else:
+        return None
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=30)
+    except Exception as err:
+        print(f'[CLI Setup] auth status check failed: {err}')
+        return None
+    return _dodari_cli_parse_auth_status(engine, proc.stdout, proc.returncode)
+
+def _dodari_cli_setup_message(T, state, binary, elapsed_sec=0, extra=''):
+    elapsed = _dodari_format_elapsed(elapsed_sec)
+    safe_extra = str(extra).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    text = T(f'cli_setup_{state}').format(bin=binary, elapsed=elapsed, extra=safe_extra)
+    if state == 'ready':
+        color = 'green'
+    elif state in ('install_failed', 'install_manual', 'login_timeout'):
+        color = 'red'
+    else:
+        color = '#b8860b'
+    return f"<p style='color:{color};'>{text}</p>"
 
 CLI_RATE_LIMIT_PATTERNS = (
     'usage limit',
@@ -1061,7 +1250,15 @@ UI_TEXT = {
     'engine_ollama':'✔ Ollama 번역 엔진 활성화됨',
     'engine_gemma':'✔ Gemma 4 API 번역 사용 중',
     'engine_cli':'✔ CLI 구독 번역 엔진 사용 중',
-    'cli_notice':'본인 계정·본인 구독 한도로 실행됩니다. CLI 직접 설치·로그인이 필요합니다.',
+    'cli_notice':"본인 계정·본인 구독 한도로 실행됩니다. 처음 선택하면 CLI 설치와 브라우저 로그인을 자동으로 진행합니다.",
+    'cli_setup_checking':"🔍 {bin} CLI 확인 중…",
+    'cli_setup_installing':"⬇️ {bin} CLI 설치 중… ({elapsed}) 공식 설치 스크립트를 실행하고 있습니다. 끝나면 자동으로 로그인 단계로 넘어갑니다.",
+    'cli_setup_install_failed':"❌ {bin} CLI 자동 설치에 실패했습니다. 터미널에서 직접 설치한 뒤 엔진을 다시 선택하세요: {extra}",
+    'cli_setup_install_manual':"❌ {bin} CLI는 자동 설치할 수 없습니다. 먼저 설치한 뒤 엔진을 다시 선택하세요: {extra}",
+    'cli_setup_login_wait':"🔐 {bin} 로그인이 필요합니다. 로그인용 터미널 창을 열었습니다 — 브라우저에서 본인 계정으로 로그인하세요. 완료되면 자동으로 감지합니다. ({elapsed})",
+    'cli_setup_login_manual':"🔐 {bin} 로그인이 필요합니다. 터미널 창을 자동으로 열 수 없어 직접 실행해야 합니다: {extra} — 로그인이 끝나면 자동으로 감지합니다. ({elapsed})",
+    'cli_setup_login_timeout':"⚠️ {bin} 로그인이 확인되지 않아 대기를 중단했습니다. 터미널에서 {extra} 를 실행해 로그인한 뒤 엔진을 다시 선택하세요.",
+    'cli_setup_ready':"✅ {bin} 준비 완료 — 본인 계정·본인 구독 한도로 번역합니다.",
     'err_cli_engine':'CLI 번역 엔진을 사용할 수 없습니다.',
     'model_label':"모델 선택 (E4B: 16GB 이하 초고속 추천 · 31B: 32GB 이상 고품질, 교체 시 서버 재시작 소요)",
     'bilingual_label':"이중언어 표기 방식 (학습용은 '원문(번역문)' 추천)",
@@ -1092,6 +1289,11 @@ UI_TEXT = {
     'err_file_count':"한번에 {n}개 이상의 파일을 번역할 수 없습니다.",
     'err_lang_same':"원본 언어와 목표 언어가 같습니다 ({lang}).<br>다른 목표 언어를 선택한 후 다시 시도해주세요.",
     'err_lang_detect':"언어 감지가 완료되지 않았습니다.<br>파일을 다시 첨부한 후 언어 확인까지 완료해주세요.",
+    'err_partial_failure':"⚠️ {n}개 파일 번역에 실패했습니다.<br>{items}성공한 파일은 하단에서 다운로드할 수 있습니다.",
+    'err_all_failed':"❌ 번역에 실패했습니다. 생성된 결과물이 없습니다.<br>{items}오류를 확인한 후 다시 실행해주세요. 진행분은 보존되어 이어서 번역됩니다.",
+    'err_failed_item':"• [{name}] {reason}<br>",
+    'err_non_ascii_path':"❌ PDF 번역은 파일 경로와 도다리 설치 경로에 한글 등 영문 외 문자가 있으면 실패합니다.<br>다음 경로를 영문으로 바꾼 뒤 다시 시도해 주세요:<br>{paths}",
+    'err_non_ascii_path_hint':"(파일: 파일명을 영문으로 바꾸거나 영문 폴더로 옮겨 첨부 / 설치 폴더: 영문 경로로 옮기고 dodari_env를 지운 뒤 다시 설치)",
     'err_server':"[오류] 번역 서버({url})에 연결할 수 없습니다.<br>{guide}",
     'server_guide_mac':"Mac: <code>start_mac.sh</code> 실행 여부를 확인하세요.",
     'server_guide_linux':"Linux: <code>start_ubuntu.sh</code> 또는 vLLM 서버 실행 여부를 확인하세요.",
@@ -1102,6 +1304,14 @@ UI_TEXT = {
     'translation_complete':"번역완료! 걸린시간 : {t} 하단에서 결과물을 다운로드하세요.",
     'progress_init':"번역 모델을 준비중입니다...",
     'progress_server':"번역 서버 상태 확인 중...",
+    'model_switch_stopping':"🔄 모델 교체 중: 기존 서버를 종료하고 {model} 서버를 시작합니다.",
+    'model_switch_waiting_cached':"⏳ {model} 로딩 중… ({elapsed} 경과) 이미 내려받은 모델을 디스크에서 불러옵니다. 완료되면 여기에 표시되며, 그 전에는 번역을 시작할 수 없습니다.",
+    'model_switch_waiting_download':"⏳ {model} 다운로드·로딩 중… ({elapsed} 경과) 처음 쓰는 모델은 HuggingFace에서 내려받습니다({size}). 진행률은 터미널 창에 표시됩니다. 완료되면 여기에 표시되며, 그 전에는 번역을 시작할 수 없습니다.",
+    'model_switch_ready':"✅ {model} 준비 완료 ({elapsed} 소요). 번역을 시작할 수 있습니다.",
+    'model_switch_died':"❌ {model} 서버가 시작 직후 종료되었습니다. 터미널 창의 오류 로그를 확인하세요.",
+    'model_switch_timeout':"⚠️ {model} 서버가 {elapsed} 동안 응답하지 않아 대기를 중단했습니다. 터미널 창의 로그를 확인하세요.",
+    'err_model_loading':"[안내] 모델을 교체·로딩하는 중입니다. 모델 상태가 '준비 완료'로 바뀐 뒤 다시 시작하세요.",
+    'genre_auto_applied':"장르 자동 감지 적용: {genre}",
     'progress_files':'파일로딩',
     'lang_unknown':'알 수 없음',
     'glossary_applied':'✅ **{n}개의 용어가 적용되었습니다.** 이제 번역 시 이 용어들이 우선 사용됩니다.',
@@ -1119,7 +1329,15 @@ UI_TEXT = {
     'engine_ollama':'✔ Ollama translation engine active',
     'engine_gemma':'✔ Gemma 4 API translation active',
     'engine_cli':'✔ CLI subscription translation engine active',
-    'cli_notice':'Runs on your own account and your own subscription limits. You must install and log in to the CLI yourself.',
+    'cli_notice':"Runs on your own account and your own subscription limits. On first selection the CLI is installed and the browser login is started automatically.",
+    'cli_setup_checking':"🔍 Checking the {bin} CLI…",
+    'cli_setup_installing':"⬇️ Installing the {bin} CLI… ({elapsed}) Running the official installer. The login step starts automatically when it finishes.",
+    'cli_setup_install_failed':"❌ Automatic installation of the {bin} CLI failed. Install it in a terminal, then select the engine again: {extra}",
+    'cli_setup_install_manual':"❌ The {bin} CLI cannot be installed automatically. Install it first, then select the engine again: {extra}",
+    'cli_setup_login_wait':"🔐 {bin} login required. A terminal window was opened for login — sign in with your own account in the browser. Detected automatically when done. ({elapsed})",
+    'cli_setup_login_manual':"🔐 {bin} login required. A terminal could not be opened automatically; run this yourself: {extra} — detected automatically once you are logged in. ({elapsed})",
+    'cli_setup_login_timeout':"⚠️ {bin} login was not confirmed; stopped waiting. Run {extra} in a terminal to log in, then select the engine again.",
+    'cli_setup_ready':"✅ {bin} is ready — translating on your own account and subscription limits.",
     'err_cli_engine':'The CLI translation engine is unavailable.',
     'model_label':"Model selection (E4B: fast for ≤16GB · 31B: high quality for ≥32GB, server restart on change)",
     'bilingual_label':"Bilingual display mode (for learners: 'Original (Translation)' recommended)",
@@ -1150,6 +1368,11 @@ UI_TEXT = {
     'err_file_count':"Cannot translate more than {n} files at a time.",
     'err_lang_same':"Source and target languages are the same ({lang}).<br>Please select a different target language.",
     'err_lang_detect':"Language detection not complete.<br>Please re-attach the file and wait for detection.",
+    'err_partial_failure':"⚠️ Translation failed for {n} file(s).<br>{items}Successful files can be downloaded below.",
+    'err_all_failed':"❌ Translation failed. No output files were created.<br>{items}Check the error and run again. Progress is preserved and will resume.",
+    'err_failed_item':"• [{name}] {reason}<br>",
+    'err_non_ascii_path':"❌ PDF translation fails when the file path or the Dodari install path contains non-English characters.<br>Please change the following paths to English and try again:<br>{paths}",
+    'err_non_ascii_path_hint':"(File: rename it in English or move it to an English folder before attaching / Install folder: move it to an English path, delete dodari_env, and reinstall)",
     'err_server':"[Error] Cannot connect to translation server ({url}).<br>{guide}",
     'server_guide_mac':"Mac: Check if <code>start_mac.sh</code> is running.",
     'server_guide_linux':"Linux: Check if <code>start_ubuntu.sh</code> or the vLLM server is running.",
@@ -1160,6 +1383,14 @@ UI_TEXT = {
     'translation_complete':"Translation complete! Time elapsed: {t} Download the results below.",
     'progress_init':"Preparing translation model...",
     'progress_server':"Checking translation server status...",
+    'model_switch_stopping':"🔄 Switching model: stopping the current server and starting {model}.",
+    'model_switch_waiting_cached':"⏳ Loading {model}… ({elapsed} elapsed) Loading the model that is already on disk. This message updates when it is ready; translation cannot start before that.",
+    'model_switch_waiting_download':"⏳ Downloading and loading {model}… ({elapsed} elapsed) A model used for the first time is fetched from HuggingFace ({size}). Progress is shown in the terminal window. This message updates when it is ready; translation cannot start before that.",
+    'model_switch_ready':"✅ {model} is ready ({elapsed}). You can start translating.",
+    'model_switch_died':"❌ The {model} server exited right after starting. Check the error log in the terminal window.",
+    'model_switch_timeout':"⚠️ The {model} server did not respond for {elapsed}; stopped waiting. Check the terminal log.",
+    'err_model_loading':"[Notice] The model is being switched or loaded. Start again once the model status shows ready.",
+    'genre_auto_applied':"Genre auto-detected and applied: {genre}",
     'progress_files':'Loading files',
     'lang_unknown':'Unknown',
     'glossary_applied':'✅ **{n} terms applied.** These will be prioritized during translation.',
@@ -1177,7 +1408,15 @@ UI_TEXT = {
     'engine_ollama':'✔ Ollama翻訳エンジン有効',
     'engine_gemma':'✔ Gemma 4 API翻訳使用中',
     'engine_cli':'✔ CLI サブスク翻訳エンジン使用中',
-    'cli_notice':'ご自身のアカウント・ご自身のサブスク上限で実行されます。CLIのインストールとログインはご自身で行う必要があります。',
+    'cli_notice':"ご自身のアカウント・ご自身のサブスク上限で実行されます。初回選択時にCLIのインストールとブラウザログインを自動で進めます。",
+    'cli_setup_checking':"🔍 {bin} CLI を確認中…",
+    'cli_setup_installing':"⬇️ {bin} CLI をインストール中… ({elapsed}) 公式インストーラーを実行しています。完了すると自動でログイン手順に進みます。",
+    'cli_setup_install_failed':"❌ {bin} CLI の自動インストールに失敗しました。ターミナルで手動インストール後、エンジンを再選択してください: {extra}",
+    'cli_setup_install_manual':"❌ {bin} CLI は自動インストールできません。先にインストールしてからエンジンを再選択してください: {extra}",
+    'cli_setup_login_wait':"🔐 {bin} のログインが必要です。ログイン用ターミナルを開きました — ブラウザでご自身のアカウントでログインしてください。完了すると自動検出します。({elapsed})",
+    'cli_setup_login_manual':"🔐 {bin} のログインが必要です。ターミナルを自動で開けないため手動で実行してください: {extra} — ログイン後に自動検出します。({elapsed})",
+    'cli_setup_login_timeout':"⚠️ {bin} のログインを確認できず待機を中止しました。ターミナルで {extra} を実行してログイン後、エンジンを再選択してください。",
+    'cli_setup_ready':"✅ {bin} 準備完了 — ご自身のアカウント・サブスク上限で翻訳します。",
     'err_cli_engine':'CLI翻訳エンジンを利用できません。',
     'model_label':"モデル選択（E4B: 16GB以下高速・31B: 32GB以上高品質、切替時サーバー再起動）",
     'bilingual_label':"対訳表示方式（学習者向け：「原文（訳文）」推奨）",
@@ -1208,6 +1447,11 @@ UI_TEXT = {
     'err_file_count':"一度に{n}個以上のファイルは翻訳できません。",
     'err_lang_same':"原文言語と翻訳先言語が同じです（{lang}）。<br>別の翻訳先言語を選択してください。",
     'err_lang_detect':"言語検出が完了していません。<br>ファイルを再添付して言語確認を完了してください。",
+    'err_partial_failure':"⚠️ {n}個のファイルの翻訳に失敗しました。<br>{items}成功したファイルは下でダウンロードできます。",
+    'err_all_failed':"❌ 翻訳に失敗しました。生成された成果物がありません。<br>{items}エラーを確認して再実行してください。進行分は保存され再開されます。",
+    'err_failed_item':"• [{name}] {reason}<br>",
+    'err_non_ascii_path':"❌ PDF翻訳は、ファイルパスまたは道多里のインストールパスに英字以外の文字が含まれていると失敗します。<br>次のパスを英字に変更して再度お試しください:<br>{paths}",
+    'err_non_ascii_path_hint':"（ファイル: ファイル名を英字に変更するか英字フォルダに移して添付 / インストールフォルダ: 英字パスに移動し dodari_env を削除して再インストール）",
     'err_server':"[エラー] 翻訳サーバー({url})に接続できません。<br>{guide}",
     'server_guide_mac':"Mac: <code>start_mac.sh</code>が実行中か確認してください。",
     'server_guide_linux':"Linux: <code>start_ubuntu.sh</code>またはvLLMサーバーの起動を確認してください。",
@@ -1218,6 +1462,14 @@ UI_TEXT = {
     'translation_complete':"翻訳完了！所要時間: {t} 下でダウンロードしてください。",
     'progress_init':"翻訳モデルを準備中...",
     'progress_server':"翻訳サーバーの状態確認中...",
+    'model_switch_stopping':"🔄 モデル切替中: 現在のサーバーを停止し、{model} サーバーを起動します。",
+    'model_switch_waiting_cached':"⏳ {model} を読み込み中… ({elapsed} 経過) すでにダウンロード済みのモデルをディスクから読み込みます。準備完了時にここが更新され、それまで翻訳は開始できません。",
+    'model_switch_waiting_download':"⏳ {model} をダウンロード・読み込み中… ({elapsed} 経過) 初めて使うモデルは HuggingFace から取得します({size})。進行状況はターミナルに表示されます。準備完了時にここが更新され、それまで翻訳は開始できません。",
+    'model_switch_ready':"✅ {model} の準備が完了しました ({elapsed})。翻訳を開始できます。",
+    'model_switch_died':"❌ {model} サーバーが起動直後に終了しました。ターミナルのエラーログを確認してください。",
+    'model_switch_timeout':"⚠️ {model} サーバーが {elapsed} 応答しなかったため待機を中止しました。ターミナルのログを確認してください。",
+    'err_model_loading':"[お知らせ] モデルの切替・読み込み中です。モデル状態が準備完了になってから再度開始してください。",
+    'genre_auto_applied':"ジャンルを自動判定して適用: {genre}",
     'progress_files':'ファイル読込',
     'lang_unknown':'不明',
     'glossary_applied':'✅ **{n}件の用語が適用されました。** 翻訳時にこれらが優先されます。',
@@ -1235,7 +1487,15 @@ UI_TEXT = {
     'engine_ollama':'✔ Ollama翻译引擎已激活',
     'engine_gemma':'✔ 正在使用Gemma 4 API翻译',
     'engine_cli':'✔ 正在使用 CLI 订阅翻译引擎',
-    'cli_notice':'使用您自己的账号和您自己的订阅额度运行。需要您自行安装并登录 CLI。',
+    'cli_notice':"使用您自己的账户和订阅额度运行。首次选择时会自动安装 CLI 并启动浏览器登录。",
+    'cli_setup_checking':"🔍 正在检查 {bin} CLI…",
+    'cli_setup_installing':"⬇️ 正在安装 {bin} CLI…（{elapsed}）正在运行官方安装脚本，完成后会自动进入登录步骤。",
+    'cli_setup_install_failed':"❌ {bin} CLI 自动安装失败。请在终端中手动安装后重新选择引擎：{extra}",
+    'cli_setup_install_manual':"❌ {bin} CLI 无法自动安装。请先安装后重新选择引擎：{extra}",
+    'cli_setup_login_wait':"🔐 需要登录 {bin}。已打开登录终端窗口 — 请在浏览器中用您自己的账户登录，完成后会自动检测。（{elapsed}）",
+    'cli_setup_login_manual':"🔐 需要登录 {bin}。无法自动打开终端，请手动运行：{extra} — 登录完成后会自动检测。（{elapsed}）",
+    'cli_setup_login_timeout':"⚠️ 未能确认 {bin} 登录，已停止等待。请在终端运行 {extra} 登录后重新选择引擎。",
+    'cli_setup_ready':"✅ {bin} 已就绪 — 使用您自己的账户和订阅额度翻译。",
     'err_cli_engine':'无法使用 CLI 翻译引擎。',
     'model_label':"模型选择（E4B：16GB以下高速·31B：32GB以上高质量，切换时重启服务器）",
     'bilingual_label':"双语显示方式（学习者推荐：'原文（译文）'）",
@@ -1266,6 +1526,11 @@ UI_TEXT = {
     'err_file_count':"每次不能翻译超过{n}个文件。",
     'err_lang_same':"原始语言和目标语言相同（{lang}）。<br>请选择不同的目标语言。",
     'err_lang_detect':"语言检测未完成。<br>请重新添加文件并等待语言检测完成。",
+    'err_partial_failure':"⚠️ {n}个文件翻译失败。<br>{items}成功的文件可在下方下载。",
+    'err_all_failed':"❌ 翻译失败，未生成任何结果文件。<br>{items}请检查错误后重新运行。进度已保存，可继续翻译。",
+    'err_failed_item':"• [{name}] {reason}<br>",
+    'err_non_ascii_path':"❌ 如果文件路径或 Dodari 安装路径中包含非英文字符，PDF 翻译将失败。<br>请将以下路径改为英文后重试:<br>{paths}",
+    'err_non_ascii_path_hint':"（文件：将文件名改为英文或移至英文文件夹后再添加 / 安装文件夹：移至英文路径，删除 dodari_env 后重新安装）",
     'err_server':"[错误] 无法连接到翻译服务器({url})。<br>{guide}",
     'server_guide_mac':"Mac: 请检查<code>start_mac.sh</code>是否正在运行。",
     'server_guide_linux':"Linux: 请检查<code>start_ubuntu.sh</code>或vLLM服务器是否正在运行。",
@@ -1276,6 +1541,14 @@ UI_TEXT = {
     'translation_complete':"翻译完成！耗时：{t} 请在下方下载结果。",
     'progress_init':"正在准备翻译模型...",
     'progress_server':"正在检查翻译服务器状态...",
+    'model_switch_stopping':"🔄 正在切换模型：停止当前服务器并启动 {model}。",
+    'model_switch_waiting_cached':"⏳ 正在加载 {model}…（已用 {elapsed}）从磁盘加载已下载的模型。就绪后此处会更新，在此之前无法开始翻译。",
+    'model_switch_waiting_download':"⏳ 正在下载并加载 {model}…（已用 {elapsed}）首次使用的模型将从 HuggingFace 下载（{size}）。进度显示在终端窗口。就绪后此处会更新，在此之前无法开始翻译。",
+    'model_switch_ready':"✅ {model} 已就绪（{elapsed}）。可以开始翻译。",
+    'model_switch_died':"❌ {model} 服务器启动后立即退出。请查看终端窗口中的错误日志。",
+    'model_switch_timeout':"⚠️ {model} 服务器在 {elapsed} 内无响应，已停止等待。请查看终端日志。",
+    'err_model_loading':"[提示] 正在切换或加载模型。请等模型状态显示就绪后再开始。",
+    'genre_auto_applied':"已自动识别并应用体裁：{genre}",
     'progress_files':'加载文件',
     'lang_unknown':'未知',
     'glossary_applied':'✅ **已应用{n}条术语。** 翻译时将优先使用这些术语。',
@@ -1293,7 +1566,15 @@ UI_TEXT = {
     'engine_ollama':'✔ Moteur de traduction Ollama actif',
     'engine_gemma':'✔ Traduction API Gemma 4 active',
     'engine_cli':'✔ Moteur de traduction CLI par abonnement actif',
-    'cli_notice':"S'exécute avec votre propre compte et vos propres limites d'abonnement. Vous devez installer et vous connecter au CLI vous-même.",
+    'cli_notice':"Fonctionne avec votre propre compte et vos propres limites d'abonnement. À la première sélection, le CLI est installé et la connexion navigateur est lancée automatiquement.",
+    'cli_setup_checking':"🔍 Vérification du CLI {bin}…",
+    'cli_setup_installing':"⬇️ Installation du CLI {bin}… ({elapsed}) Exécution de l'installateur officiel. L'étape de connexion démarre automatiquement à la fin.",
+    'cli_setup_install_failed':"❌ L'installation automatique du CLI {bin} a échoué. Installez-le dans un terminal puis resélectionnez le moteur : {extra}",
+    'cli_setup_install_manual':"❌ Le CLI {bin} ne peut pas être installé automatiquement. Installez-le d'abord puis resélectionnez le moteur : {extra}",
+    'cli_setup_login_wait':"🔐 Connexion {bin} requise. Une fenêtre de terminal a été ouverte — connectez-vous avec votre propre compte dans le navigateur. Détection automatique une fois terminé. ({elapsed})",
+    'cli_setup_login_manual':"🔐 Connexion {bin} requise. Impossible d'ouvrir un terminal automatiquement ; exécutez vous-même : {extra} — détection automatique après connexion. ({elapsed})",
+    'cli_setup_login_timeout':"⚠️ Connexion {bin} non confirmée ; attente interrompue. Exécutez {extra} dans un terminal puis resélectionnez le moteur.",
+    'cli_setup_ready':"✅ {bin} est prêt — traduction avec votre propre compte et vos limites d'abonnement.",
     'err_cli_engine':'Le moteur de traduction CLI est indisponible.',
     'model_label':"Sélection du modèle (E4B : rapide ≤16GB · 31B : haute qualité ≥32GB, redémarrage serveur au changement)",
     'bilingual_label':"Mode bilingue (pour apprenants : 'Original (Traduction)' recommandé)",
@@ -1324,6 +1605,11 @@ UI_TEXT = {
     'err_file_count':"Impossible de traduire plus de {n} fichiers à la fois.",
     'err_lang_same':"La langue source et la langue cible sont identiques ({lang}).<br>Veuillez sélectionner une langue cible différente.",
     'err_lang_detect':"Détection de langue incomplète.<br>Veuillez re-joindre le fichier et attendre la détection.",
+    'err_partial_failure':"⚠️ La traduction a échoué pour {n} fichier(s).<br>{items}Les fichiers réussis sont téléchargeables ci-dessous.",
+    'err_all_failed':"❌ La traduction a échoué. Aucun fichier de sortie n'a été créé.<br>{items}Vérifiez l'erreur et relancez. La progression est conservée et reprendra.",
+    'err_failed_item':"• [{name}] {reason}<br>",
+    'err_non_ascii_path':"❌ La traduction PDF échoue si le chemin du fichier ou le chemin d'installation de Dodari contient des caractères non anglais.<br>Veuillez remplacer les chemins suivants par des caractères anglais, puis réessayer :<br>{paths}",
+    'err_non_ascii_path_hint':"(Fichier : renommez-le en anglais ou déplacez-le dans un dossier anglais avant de l'ajouter / Dossier d'installation : déplacez-le vers un chemin anglais, supprimez dodari_env et réinstallez)",
     'err_server':"[Erreur] Impossible de se connecter au serveur ({url}).<br>{guide}",
     'server_guide_mac':"Mac : Vérifiez que <code>start_mac.sh</code> est en cours d'exécution.",
     'server_guide_linux':"Linux : Vérifiez que <code>start_ubuntu.sh</code> ou le serveur vLLM est lancé.",
@@ -1334,6 +1620,14 @@ UI_TEXT = {
     'translation_complete':"Traduction terminée ! Durée : {t} Téléchargez les résultats ci-dessous.",
     'progress_init':"Préparation du modèle de traduction...",
     'progress_server':"Vérification du serveur de traduction...",
+    'model_switch_stopping':"🔄 Changement de modèle : arrêt du serveur actuel et démarrage de {model}.",
+    'model_switch_waiting_cached':"⏳ Chargement de {model}… ({elapsed} écoulé) Chargement du modèle déjà téléchargé depuis le disque. Ce message se mettra à jour une fois prêt ; la traduction ne peut pas démarrer avant.",
+    'model_switch_waiting_download':"⏳ Téléchargement et chargement de {model}… ({elapsed} écoulé) Un modèle utilisé pour la première fois est récupéré depuis HuggingFace ({size}). La progression s'affiche dans le terminal. Ce message se mettra à jour une fois prêt ; la traduction ne peut pas démarrer avant.",
+    'model_switch_ready':"✅ {model} est prêt ({elapsed}). Vous pouvez lancer la traduction.",
+    'model_switch_died':"❌ Le serveur {model} s'est arrêté juste après le démarrage. Consultez le journal d'erreurs dans le terminal.",
+    'model_switch_timeout':"⚠️ Le serveur {model} n'a pas répondu pendant {elapsed} ; attente interrompue. Consultez le journal du terminal.",
+    'err_model_loading':"[Info] Le modèle est en cours de changement ou de chargement. Relancez une fois que l'état du modèle indique prêt.",
+    'genre_auto_applied':"Genre détecté et appliqué automatiquement : {genre}",
     'progress_files':'Chargement des fichiers',
     'lang_unknown':'Inconnu',
     'glossary_applied':'✅ **{n} termes appliqués.** Ils seront prioritaires lors de la traduction.',
@@ -1351,7 +1645,15 @@ UI_TEXT = {
     'engine_ollama':'✔ Motore di traduzione Ollama attivo',
     'engine_gemma':'✔ Traduzione API Gemma 4 attiva',
     'engine_cli':'✔ Motore di traduzione CLI in abbonamento attivo',
-    'cli_notice':"Viene eseguito con il tuo account e i limiti del tuo abbonamento. Devi installare ed effettuare l'accesso al CLI autonomamente.",
+    'cli_notice':"Funziona con il tuo account e i tuoi limiti di abbonamento. Alla prima selezione il CLI viene installato e il login nel browser viene avviato automaticamente.",
+    'cli_setup_checking':"🔍 Verifica del CLI {bin}…",
+    'cli_setup_installing':"⬇️ Installazione del CLI {bin}… ({elapsed}) Esecuzione dell'installer ufficiale. Al termine il login parte automaticamente.",
+    'cli_setup_install_failed':"❌ Installazione automatica del CLI {bin} fallita. Installalo da terminale e riseleziona il motore: {extra}",
+    'cli_setup_install_manual':"❌ Il CLI {bin} non può essere installato automaticamente. Installalo prima e riseleziona il motore: {extra}",
+    'cli_setup_login_wait':"🔐 Login {bin} richiesto. È stata aperta una finestra di terminale — accedi con il tuo account nel browser. Rilevato automaticamente al termine. ({elapsed})",
+    'cli_setup_login_manual':"🔐 Login {bin} richiesto. Impossibile aprire un terminale automaticamente; esegui tu: {extra} — rilevato automaticamente dopo il login. ({elapsed})",
+    'cli_setup_login_timeout':"⚠️ Login {bin} non confermato; attesa interrotta. Esegui {extra} nel terminale, poi riseleziona il motore.",
+    'cli_setup_ready':"✅ {bin} pronto — traduzione con il tuo account e i tuoi limiti di abbonamento.",
     'err_cli_engine':'Il motore di traduzione CLI non è disponibile.',
     'model_label':"Selezione modello (E4B: veloce ≤16GB · 31B: alta qualità ≥32GB, riavvio server al cambio)",
     'bilingual_label':"Modalità bilingue (per studenti: 'Originale (Traduzione)' consigliato)",
@@ -1382,6 +1684,11 @@ UI_TEXT = {
     'err_file_count':"Non è possibile tradurre più di {n} file alla volta.",
     'err_lang_same':"La lingua sorgente e di destinazione sono uguali ({lang}).<br>Seleziona una lingua di destinazione diversa.",
     'err_lang_detect':"Rilevamento lingua non completato.<br>Riallega il file e attendi il rilevamento.",
+    'err_partial_failure':"⚠️ Traduzione fallita per {n} file.<br>{items}I file riusciti sono scaricabili qui sotto.",
+    'err_all_failed':"❌ Traduzione fallita. Nessun file di output è stato creato.<br>{items}Controlla l'errore ed esegui di nuovo. Il progresso è conservato e riprenderà.",
+    'err_failed_item':"• [{name}] {reason}<br>",
+    'err_non_ascii_path':"❌ La traduzione PDF fallisce se il percorso del file o il percorso di installazione di Dodari contiene caratteri non inglesi.<br>Modifica i seguenti percorsi in inglese e riprova:<br>{paths}",
+    'err_non_ascii_path_hint':"(File: rinominalo in inglese o spostalo in una cartella inglese prima di allegarlo / Cartella di installazione: spostala in un percorso inglese, elimina dodari_env e reinstalla)",
     'err_server':"[Errore] Impossibile connettersi al server di traduzione ({url}).<br>{guide}",
     'server_guide_mac':"Mac: Verifica che <code>start_mac.sh</code> sia in esecuzione.",
     'server_guide_linux':"Linux: Verifica che <code>start_ubuntu.sh</code> o il server vLLM sia in esecuzione.",
@@ -1392,6 +1699,14 @@ UI_TEXT = {
     'translation_complete':"Traduzione completata! Tempo impiegato: {t} Scarica i risultati qui sotto.",
     'progress_init':"Preparazione modello di traduzione...",
     'progress_server':"Verifica stato server di traduzione...",
+    'model_switch_stopping':"🔄 Cambio modello: arresto del server attuale e avvio di {model}.",
+    'model_switch_waiting_cached':"⏳ Caricamento di {model}… ({elapsed} trascorsi) Caricamento dal disco del modello già scaricato. Questo messaggio si aggiorna quando è pronto; prima non è possibile avviare la traduzione.",
+    'model_switch_waiting_download':"⏳ Download e caricamento di {model}… ({elapsed} trascorsi) Un modello usato per la prima volta viene scaricato da HuggingFace ({size}). L'avanzamento è mostrato nel terminale. Questo messaggio si aggiorna quando è pronto; prima non è possibile avviare la traduzione.",
+    'model_switch_ready':"✅ {model} è pronto ({elapsed}). Puoi avviare la traduzione.",
+    'model_switch_died':"❌ Il server {model} si è chiuso subito dopo l'avvio. Controlla il log degli errori nel terminale.",
+    'model_switch_timeout':"⚠️ Il server {model} non ha risposto per {elapsed}; attesa interrotta. Controlla il log del terminale.",
+    'err_model_loading':"[Avviso] Il modello è in fase di cambio o caricamento. Riavvia quando lo stato del modello indica pronto.",
+    'genre_auto_applied':"Genere rilevato e applicato automaticamente: {genre}",
     'progress_files':'Caricamento file',
     'lang_unknown':'Sconosciuto',
     'glossary_applied':'✅ **{n} termini applicati.** Saranno prioritari durante la traduzione.',
@@ -1409,7 +1724,15 @@ UI_TEXT = {
     'engine_ollama':'✔ Ollama vertaalmachine actief',
     'engine_gemma':'✔ Gemma 4 API vertaling actief',
     'engine_cli':'✔ CLI-abonnementsvertaalmachine actief',
-    'cli_notice':'Draait op je eigen account en je eigen abonnementslimieten. Je moet de CLI zelf installeren en inloggen.',
+    'cli_notice':"Draait op je eigen account en je eigen abonnementslimieten. Bij de eerste selectie wordt de CLI automatisch geïnstalleerd en de browserlogin gestart.",
+    'cli_setup_checking':"🔍 {bin} CLI controleren…",
+    'cli_setup_installing':"⬇️ {bin} CLI installeren… ({elapsed}) Het officiële installatiescript draait. Daarna start de loginstap automatisch.",
+    'cli_setup_install_failed':"❌ Automatische installatie van de {bin} CLI mislukt. Installeer in een terminal en kies de engine opnieuw: {extra}",
+    'cli_setup_install_manual':"❌ De {bin} CLI kan niet automatisch worden geïnstalleerd. Installeer eerst en kies de engine opnieuw: {extra}",
+    'cli_setup_login_wait':"🔐 {bin} login vereist. Er is een terminalvenster geopend — log in met je eigen account in de browser. Wordt automatisch gedetecteerd. ({elapsed})",
+    'cli_setup_login_manual':"🔐 {bin} login vereist. Kon geen terminal openen; voer zelf uit: {extra} — wordt automatisch gedetecteerd na inloggen. ({elapsed})",
+    'cli_setup_login_timeout':"⚠️ {bin} login niet bevestigd; wachten gestopt. Voer {extra} uit in een terminal en kies de engine opnieuw.",
+    'cli_setup_ready':"✅ {bin} is klaar — vertalen op je eigen account en abonnementslimieten.",
     'err_cli_engine':'De CLI-vertaalmachine is niet beschikbaar.',
     'model_label':"Modelselectie (E4B: snel ≤16GB · 31B: hoge kwaliteit ≥32GB, server herstart bij wisseling)",
     'bilingual_label':"Tweetalige weergave (voor leerlingen: 'Origineel (Vertaling)' aanbevolen)",
@@ -1440,6 +1763,11 @@ UI_TEXT = {
     'err_file_count':"Kan niet meer dan {n} bestanden tegelijk vertalen.",
     'err_lang_same':"Bron- en doeltaal zijn gelijk ({lang}).<br>Selecteer een andere doeltaal.",
     'err_lang_detect':"Taaldetectie niet voltooid.<br>Voeg het bestand opnieuw toe en wacht op detectie.",
+    'err_partial_failure':"⚠️ Vertaling mislukt voor {n} bestand(en).<br>{items}Geslaagde bestanden kunt u hieronder downloaden.",
+    'err_all_failed':"❌ Vertaling mislukt. Er zijn geen uitvoerbestanden gemaakt.<br>{items}Controleer de fout en voer opnieuw uit. De voortgang is bewaard en wordt hervat.",
+    'err_failed_item':"• [{name}] {reason}<br>",
+    'err_non_ascii_path':"❌ PDF-vertaling mislukt als het bestandspad of het installatiepad van Dodari niet-Engelse tekens bevat.<br>Wijzig de volgende paden naar Engels en probeer het opnieuw:<br>{paths}",
+    'err_non_ascii_path_hint':"(Bestand: geef het een Engelse naam of verplaats het naar een Engelse map voordat u het toevoegt / Installatiemap: verplaats deze naar een Engels pad, verwijder dodari_env en installeer opnieuw)",
     'err_server':"[Fout] Kan geen verbinding maken met vertaalserver ({url}).<br>{guide}",
     'server_guide_mac':"Mac: Controleer of <code>start_mac.sh</code> actief is.",
     'server_guide_linux':"Linux: Controleer of <code>start_ubuntu.sh</code> of de vLLM-server actief is.",
@@ -1450,6 +1778,14 @@ UI_TEXT = {
     'translation_complete':"Vertaling voltooid! Verstreken tijd: {t} Download de resultaten hieronder.",
     'progress_init':"Vertaalmodel voorbereiden...",
     'progress_server':"Status vertaalserver controleren...",
+    'model_switch_stopping':"🔄 Model wisselen: huidige server wordt gestopt en {model} wordt gestart.",
+    'model_switch_waiting_cached':"⏳ {model} laden… ({elapsed} verstreken) Het al gedownloade model wordt van schijf geladen. Dit bericht wordt bijgewerkt zodra het klaar is; eerder kan de vertaling niet starten.",
+    'model_switch_waiting_download':"⏳ {model} downloaden en laden… ({elapsed} verstreken) Een model dat voor het eerst wordt gebruikt, wordt van HuggingFace opgehaald ({size}). De voortgang staat in het terminalvenster. Dit bericht wordt bijgewerkt zodra het klaar is; eerder kan de vertaling niet starten.",
+    'model_switch_ready':"✅ {model} is klaar ({elapsed}). Je kunt beginnen met vertalen.",
+    'model_switch_died':"❌ De {model}-server is direct na het starten gestopt. Controleer het foutenlog in het terminalvenster.",
+    'model_switch_timeout':"⚠️ De {model}-server reageerde {elapsed} niet; wachten gestopt. Controleer het terminallog.",
+    'err_model_loading':"[Melding] Het model wordt gewisseld of geladen. Start opnieuw zodra de modelstatus klaar aangeeft.",
+    'genre_auto_applied':"Genre automatisch herkend en toegepast: {genre}",
     'progress_files':'Bestanden laden',
     'lang_unknown':'Onbekend',
     'glossary_applied':'✅ **{n} termen toegepast.** Deze hebben prioriteit bij vertaling.',
@@ -1467,7 +1803,15 @@ UI_TEXT = {
     'engine_ollama':'✔ Ollama oversættelsesmotor aktiv',
     'engine_gemma':'✔ Gemma 4 API oversættelse aktiv',
     'engine_cli':'✔ CLI-abonnementsoversættelsesmotor aktiv',
-    'cli_notice':"Kører på din egen konto og dine egne abonnementsgrænser. Du skal selv installere og logge ind på CLI'en.",
+    'cli_notice':"Kører på din egen konto og dine egne abonnementsgrænser. Ved første valg installeres CLI'en og browserlogin startes automatisk.",
+    'cli_setup_checking':"🔍 Kontrollerer {bin} CLI…",
+    'cli_setup_installing':"⬇️ Installerer {bin} CLI… ({elapsed}) Kører det officielle installationsscript. Logintrinnet starter automatisk bagefter.",
+    'cli_setup_install_failed':"❌ Automatisk installation af {bin} CLI mislykkedes. Installer i en terminal og vælg motoren igen: {extra}",
+    'cli_setup_install_manual':"❌ {bin} CLI kan ikke installeres automatisk. Installer først og vælg motoren igen: {extra}",
+    'cli_setup_login_wait':"🔐 {bin} login kræves. Et terminalvindue er åbnet — log ind med din egen konto i browseren. Registreres automatisk. ({elapsed})",
+    'cli_setup_login_manual':"🔐 {bin} login kræves. Kunne ikke åbne en terminal; kør selv: {extra} — registreres automatisk efter login. ({elapsed})",
+    'cli_setup_login_timeout':"⚠️ {bin} login ikke bekræftet; venter ikke længere. Kør {extra} i en terminal og vælg motoren igen.",
+    'cli_setup_ready':"✅ {bin} er klar — oversætter på din egen konto og dine abonnementsgrænser.",
     'err_cli_engine':'CLI-oversættelsesmotoren er ikke tilgængelig.',
     'model_label':"Modelvalg (E4B: hurtig ≤16GB · 31B: høj kvalitet ≥32GB, servergenstart ved skift)",
     'bilingual_label':"Tosproget visningstilstand (for lærende: 'Original (Oversættelse)' anbefales)",
@@ -1498,6 +1842,11 @@ UI_TEXT = {
     'err_file_count':"Kan ikke oversætte mere end {n} filer ad gangen.",
     'err_lang_same':"Kilde- og målsprog er ens ({lang}).<br>Vælg et andet målsprog.",
     'err_lang_detect':"Sprogregistrering ikke fuldført.<br>Vedhæft filen igen og vent på registrering.",
+    'err_partial_failure':"⚠️ Oversættelsen mislykkedes for {n} fil(er).<br>{items}De lykkede filer kan hentes nedenfor.",
+    'err_all_failed':"❌ Oversættelsen mislykkedes. Der blev ikke oprettet nogen filer.<br>{items}Tjek fejlen og kør igen. Fremdriften er bevaret og fortsætter.",
+    'err_failed_item':"• [{name}] {reason}<br>",
+    'err_non_ascii_path':"❌ PDF-oversættelse mislykkes, hvis filstien eller Dodaris installationssti indeholder ikke-engelske tegn.<br>Ret følgende stier til engelsk og prøv igen:<br>{paths}",
+    'err_non_ascii_path_hint':"(Fil: omdøb den til engelsk eller flyt den til en engelsk mappe før du vedhæfter / Installationsmappe: flyt den til en engelsk sti, slet dodari_env og installer igen)",
     'err_server':"[Fejl] Kan ikke oprette forbindelse til oversættelsesserveren ({url}).<br>{guide}",
     'server_guide_mac':"Mac: Kontroller at <code>start_mac.sh</code> kører.",
     'server_guide_linux':"Linux: Kontroller at <code>start_ubuntu.sh</code> eller vLLM-serveren kører.",
@@ -1508,6 +1857,14 @@ UI_TEXT = {
     'translation_complete':"Oversættelse fuldført! Tid brugt: {t} Download resultaterne nedenfor.",
     'progress_init':"Forbereder oversættelsesmodel...",
     'progress_server':"Kontrollerer oversættelsesserverstatus...",
+    'model_switch_stopping':"🔄 Skifter model: stopper den nuværende server og starter {model}.",
+    'model_switch_waiting_cached':"⏳ Indlæser {model}… ({elapsed} forløbet) Den allerede downloadede model indlæses fra disken. Denne besked opdateres, når den er klar; oversættelse kan ikke starte før da.",
+    'model_switch_waiting_download':"⏳ Downloader og indlæser {model}… ({elapsed} forløbet) En model, der bruges første gang, hentes fra HuggingFace ({size}). Fremskridt vises i terminalvinduet. Denne besked opdateres, når den er klar; oversættelse kan ikke starte før da.",
+    'model_switch_ready':"✅ {model} er klar ({elapsed}). Du kan begynde at oversætte.",
+    'model_switch_died':"❌ {model}-serveren afsluttede lige efter start. Tjek fejlloggen i terminalvinduet.",
+    'model_switch_timeout':"⚠️ {model}-serveren svarede ikke i {elapsed}; ventetiden er afbrudt. Tjek terminalloggen.",
+    'err_model_loading':"[Bemærk] Modellen skiftes eller indlæses. Start igen, når modelstatus viser klar.",
+    'genre_auto_applied':"Genre automatisk registreret og anvendt: {genre}",
     'progress_files':'Indlæser filer',
     'lang_unknown':'Ukendt',
     'glossary_applied':'✅ **{n} termer anvendt.** Disse vil have prioritet under oversættelse.',
@@ -1525,7 +1882,15 @@ UI_TEXT = {
     'engine_ollama':'✔ Ollama översättningsmotor aktiv',
     'engine_gemma':'✔ Gemma 4 API-översättning aktiv',
     'engine_cli':'✔ CLI-prenumerationsöversättningsmotor aktiv',
-    'cli_notice':'Körs på ditt eget konto och dina egna prenumerationsgränser. Du måste själv installera och logga in på CLI:t.',
+    'cli_notice':"Körs på ditt eget konto och dina egna prenumerationsgränser. Vid första valet installeras CLI:t och webbläsarinloggningen startas automatiskt.",
+    'cli_setup_checking':"🔍 Kontrollerar {bin} CLI…",
+    'cli_setup_installing':"⬇️ Installerar {bin} CLI… ({elapsed}) Kör det officiella installationsskriptet. Inloggningssteget startar automatiskt efteråt.",
+    'cli_setup_install_failed':"❌ Automatisk installation av {bin} CLI misslyckades. Installera i en terminal och välj motorn igen: {extra}",
+    'cli_setup_install_manual':"❌ {bin} CLI kan inte installeras automatiskt. Installera först och välj motorn igen: {extra}",
+    'cli_setup_login_wait':"🔐 {bin} inloggning krävs. Ett terminalfönster öppnades — logga in med ditt eget konto i webbläsaren. Upptäcks automatiskt. ({elapsed})",
+    'cli_setup_login_manual':"🔐 {bin} inloggning krävs. Kunde inte öppna en terminal; kör själv: {extra} — upptäcks automatiskt efter inloggning. ({elapsed})",
+    'cli_setup_login_timeout':"⚠️ {bin} inloggning bekräftades inte; slutade vänta. Kör {extra} i en terminal och välj motorn igen.",
+    'cli_setup_ready':"✅ {bin} är klar — översätter på ditt eget konto och dina prenumerationsgränser.",
     'err_cli_engine':'CLI-översättningsmotorn är inte tillgänglig.',
     'model_label':"Modellval (E4B: snabb ≤16GB · 31B: hög kvalitet ≥32GB, serveromstart vid byte)",
     'bilingual_label':"Tvåspråkigt visningsläge (för studerande: 'Original (Översättning)' rekommenderas)",
@@ -1556,6 +1921,11 @@ UI_TEXT = {
     'err_file_count':"Kan inte översätta mer än {n} filer åt gången.",
     'err_lang_same':"Käll- och målspråk är samma ({lang}).<br>Välj ett annat målspråk.",
     'err_lang_detect':"Språkdetektering inte slutförd.<br>Bifoga filen igen och vänta på detektering.",
+    'err_partial_failure':"⚠️ Översättningen misslyckades för {n} fil(er).<br>{items}De lyckade filerna kan laddas ned nedan.",
+    'err_all_failed':"❌ Översättningen misslyckades. Inga resultatfiler skapades.<br>{items}Kontrollera felet och kör igen. Förloppet är sparat och återupptas.",
+    'err_failed_item':"• [{name}] {reason}<br>",
+    'err_non_ascii_path':"❌ PDF-översättning misslyckas om filsökvägen eller Dodaris installationssökväg innehåller icke-engelska tecken.<br>Ändra följande sökvägar till engelska och försök igen:<br>{paths}",
+    'err_non_ascii_path_hint':"(Fil: byt namn till engelska eller flytta den till en engelsk mapp innan du bifogar / Installationsmapp: flytta den till en engelsk sökväg, ta bort dodari_env och installera om)",
     'err_server':"[Fel] Kan inte ansluta till översättningsservern ({url}).<br>{guide}",
     'server_guide_mac':"Mac: Kontrollera att <code>start_mac.sh</code> körs.",
     'server_guide_linux':"Linux: Kontrollera att <code>start_ubuntu.sh</code> eller vLLM-servern körs.",
@@ -1566,6 +1936,14 @@ UI_TEXT = {
     'translation_complete':"Översättning klar! Tid förfluten: {t} Ladda ned resultaten nedan.",
     'progress_init':"Förbereder översättningsmodell...",
     'progress_server':"Kontrollerar översättningsserverns status...",
+    'model_switch_stopping':"🔄 Byter modell: stoppar nuvarande server och startar {model}.",
+    'model_switch_waiting_cached':"⏳ Laddar {model}… ({elapsed} förflutit) Den redan nedladdade modellen laddas från disk. Detta meddelande uppdateras när den är klar; översättning kan inte starta innan dess.",
+    'model_switch_waiting_download':"⏳ Laddar ned och laddar {model}… ({elapsed} förflutit) En modell som används första gången hämtas från HuggingFace ({size}). Förloppet visas i terminalfönstret. Detta meddelande uppdateras när den är klar; översättning kan inte starta innan dess.",
+    'model_switch_ready':"✅ {model} är klar ({elapsed}). Du kan börja översätta.",
+    'model_switch_died':"❌ {model}-servern avslutades direkt efter start. Kontrollera felloggen i terminalfönstret.",
+    'model_switch_timeout':"⚠️ {model}-servern svarade inte på {elapsed}; väntan avbröts. Kontrollera terminalloggen.",
+    'err_model_loading':"[Info] Modellen byts eller laddas. Starta igen när modellstatusen visar klar.",
+    'genre_auto_applied':"Genre automatiskt identifierad och tillämpad: {genre}",
     'progress_files':'Laddar filer',
     'lang_unknown':'Okänt',
     'glossary_applied':'✅ **{n} termer tillämpade.** Dessa prioriteras vid översättning.',
@@ -1583,7 +1961,15 @@ UI_TEXT = {
     'engine_ollama':'✔ Ollama oversettelsesmotor aktiv',
     'engine_gemma':'✔ Gemma 4 API-oversettelse aktiv',
     'engine_cli':'✔ CLI-abonnementsoversettelsesmotor aktiv',
-    'cli_notice':'Kjører på din egen konto og dine egne abonnementsgrenser. Du må selv installere og logge inn på CLI-en.',
+    'cli_notice':"Kjører på din egen konto og dine egne abonnementsgrenser. Ved første valg installeres CLI-en og nettleserinnlogging startes automatisk.",
+    'cli_setup_checking':"🔍 Kontrollerer {bin} CLI…",
+    'cli_setup_installing':"⬇️ Installerer {bin} CLI… ({elapsed}) Kjører det offisielle installasjonsskriptet. Innloggingssteget starter automatisk etterpå.",
+    'cli_setup_install_failed':"❌ Automatisk installasjon av {bin} CLI mislyktes. Installer i en terminal og velg motoren igjen: {extra}",
+    'cli_setup_install_manual':"❌ {bin} CLI kan ikke installeres automatisk. Installer først og velg motoren igjen: {extra}",
+    'cli_setup_login_wait':"🔐 {bin} innlogging kreves. Et terminalvindu ble åpnet — logg inn med din egen konto i nettleseren. Oppdages automatisk. ({elapsed})",
+    'cli_setup_login_manual':"🔐 {bin} innlogging kreves. Kunne ikke åpne en terminal; kjør selv: {extra} — oppdages automatisk etter innlogging. ({elapsed})",
+    'cli_setup_login_timeout':"⚠️ {bin} innlogging ikke bekreftet; sluttet å vente. Kjør {extra} i en terminal og velg motoren igjen.",
+    'cli_setup_ready':"✅ {bin} er klar — oversetter på din egen konto og dine abonnementsgrenser.",
     'err_cli_engine':'CLI-oversettelsesmotoren er ikke tilgjengelig.',
     'model_label':"Modellvalg (E4B: rask ≤16GB · 31B: høy kvalitet ≥32GB, serveromstart ved bytte)",
     'bilingual_label':"Tospråklig visningsmodus (for elever: 'Original (Oversettelse)' anbefales)",
@@ -1614,6 +2000,11 @@ UI_TEXT = {
     'err_file_count':"Kan ikke oversette mer enn {n} filer om gangen.",
     'err_lang_same':"Kilde- og målspråk er det samme ({lang}).<br>Velg et annet målspråk.",
     'err_lang_detect':"Språkoppdagelse ikke fullført.<br>Legg ved filen på nytt og vent på oppdagelse.",
+    'err_partial_failure':"⚠️ Oversettelsen mislyktes for {n} fil(er).<br>{items}De vellykkede filene kan lastes ned nedenfor.",
+    'err_all_failed':"❌ Oversettelsen mislyktes. Ingen resultatfiler ble opprettet.<br>{items}Sjekk feilen og kjør igjen. Fremdriften er bevart og fortsetter.",
+    'err_failed_item':"• [{name}] {reason}<br>",
+    'err_non_ascii_path':"❌ PDF-oversettelse mislykkes hvis filbanen eller Dodaris installasjonsbane inneholder ikke-engelske tegn.<br>Endre følgende baner til engelsk og prøv igjen:<br>{paths}",
+    'err_non_ascii_path_hint':"(Fil: gi den et engelsk navn eller flytt den til en engelsk mappe før du legger den ved / Installasjonsmappe: flytt den til en engelsk bane, slett dodari_env og installer på nytt)",
     'err_server':"[Feil] Kan ikke koble til oversettelsesserveren ({url}).<br>{guide}",
     'server_guide_mac':"Mac: Kontroller at <code>start_mac.sh</code> kjører.",
     'server_guide_linux':"Linux: Kontroller at <code>start_ubuntu.sh</code> eller vLLM-serveren kjører.",
@@ -1624,6 +2015,14 @@ UI_TEXT = {
     'translation_complete':"Oversettelse fullført! Tid brukt: {t} Last ned resultater nedenfor.",
     'progress_init':"Forbereder oversettelsesmodell...",
     'progress_server':"Kontrollerer oversettelsesserverstatus...",
+    'model_switch_stopping':"🔄 Bytter modell: stopper nåværende server og starter {model}.",
+    'model_switch_waiting_cached':"⏳ Laster {model}… ({elapsed} gått) Den allerede nedlastede modellen lastes fra disk. Denne meldingen oppdateres når den er klar; oversettelse kan ikke starte før det.",
+    'model_switch_waiting_download':"⏳ Laster ned og laster {model}… ({elapsed} gått) En modell som brukes for første gang hentes fra HuggingFace ({size}). Fremdriften vises i terminalvinduet. Denne meldingen oppdateres når den er klar; oversettelse kan ikke starte før det.",
+    'model_switch_ready':"✅ {model} er klar ({elapsed}). Du kan begynne å oversette.",
+    'model_switch_died':"❌ {model}-serveren avsluttet rett etter oppstart. Sjekk feilloggen i terminalvinduet.",
+    'model_switch_timeout':"⚠️ {model}-serveren svarte ikke på {elapsed}; ventingen ble avbrutt. Sjekk terminalloggen.",
+    'err_model_loading':"[Merk] Modellen byttes eller lastes. Start på nytt når modellstatusen viser klar.",
+    'genre_auto_applied':"Sjanger automatisk gjenkjent og brukt: {genre}",
     'progress_files':'Laster filer',
     'lang_unknown':'Ukjent',
     'glossary_applied':'✅ **{n} termer brukt.** Disse vil ha prioritet under oversettelse.',
@@ -1641,7 +2040,15 @@ UI_TEXT = {
     'engine_ollama':'✔ محرك ترجمة Ollama نشط',
     'engine_gemma':'✔ ترجمة Gemma 4 API نشطة',
     'engine_cli':'✔ محرك ترجمة CLI بالاشتراك نشط',
-    'cli_notice':'يعمل بحسابك الخاص وبحدود اشتراكك الخاص. عليك تثبيت واجهة CLI وتسجيل الدخول إليها بنفسك.',
+    'cli_notice':"يعمل على حسابك الخاص وحدود اشتراكك الخاصة. عند الاختيار الأول يتم تثبيت CLI وبدء تسجيل الدخول عبر المتصفح تلقائيًا.",
+    'cli_setup_checking':"🔍 جارٍ التحقق من {bin} CLI…",
+    'cli_setup_installing':"⬇️ جارٍ تثبيت {bin} CLI… ({elapsed}) يتم تشغيل برنامج التثبيت الرسمي. تبدأ خطوة تسجيل الدخول تلقائيًا بعد الانتهاء.",
+    'cli_setup_install_failed':"❌ فشل التثبيت التلقائي لـ {bin} CLI. ثبّته من الطرفية ثم اختر المحرك مرة أخرى: {extra}",
+    'cli_setup_install_manual':"❌ لا يمكن تثبيت {bin} CLI تلقائيًا. ثبّته أولًا ثم اختر المحرك مرة أخرى: {extra}",
+    'cli_setup_login_wait':"🔐 يلزم تسجيل الدخول إلى {bin}. تم فتح نافذة طرفية — سجّل الدخول بحسابك في المتصفح. يُكتشف تلقائيًا عند الانتهاء. ({elapsed})",
+    'cli_setup_login_manual':"🔐 يلزم تسجيل الدخول إلى {bin}. تعذر فتح الطرفية تلقائيًا؛ نفّذ بنفسك: {extra} — يُكتشف تلقائيًا بعد تسجيل الدخول. ({elapsed})",
+    'cli_setup_login_timeout':"⚠️ لم يتم تأكيد تسجيل الدخول إلى {bin}؛ توقف الانتظار. نفّذ {extra} في الطرفية ثم اختر المحرك مرة أخرى.",
+    'cli_setup_ready':"✅ {bin} جاهز — الترجمة بحسابك وحدود اشتراكك.",
     'err_cli_engine':'محرك ترجمة CLI غير متاح.',
     'model_label':"اختيار النموذج (E4B: سريع ≤16GB · 31B: جودة عالية ≥32GB، إعادة تشغيل الخادم عند التبديل)",
     'bilingual_label':"وضع العرض ثنائي اللغة (للمتعلمين: يُنصح بـ 'الأصل (الترجمة)')",
@@ -1672,6 +2079,11 @@ UI_TEXT = {
     'err_file_count':"لا يمكن ترجمة أكثر من {n} ملفات في المرة الواحدة.",
     'err_lang_same':"لغة المصدر والهدف متماثلتان ({lang}).<br>اختر لغة هدف مختلفة.",
     'err_lang_detect':"اكتشاف اللغة غير مكتمل.<br>أعد إرفاق الملف وانتظر اكتمال الاكتشاف.",
+    'err_partial_failure':"⚠️ فشلت ترجمة {n} من الملفات.<br>{items}يمكن تنزيل الملفات الناجحة أدناه.",
+    'err_all_failed':"❌ فشلت الترجمة. لم يتم إنشاء أي ملفات ناتجة.<br>{items}تحقق من الخطأ ثم أعد التشغيل. تم الحفاظ على التقدم وسيتم المتابعة.",
+    'err_failed_item':"• [{name}] {reason}<br>",
+    'err_non_ascii_path':"❌ تفشل ترجمة PDF إذا كان مسار الملف أو مسار تثبيت دوداري يحتوي على أحرف غير إنجليزية.<br>يرجى تغيير المسارات التالية إلى الإنجليزية ثم المحاولة مرة أخرى:<br>{paths}",
+    'err_non_ascii_path_hint':"(الملف: أعد تسميته بالإنجليزية أو انقله إلى مجلد إنجليزي قبل إرفاقه / مجلد التثبيت: انقله إلى مسار إنجليزي واحذف dodari_env ثم أعد التثبيت)",
     'err_server':"[خطأ] لا يمكن الاتصال بخادم الترجمة ({url}).<br>{guide}",
     'server_guide_mac':"Mac: تحقق من تشغيل <code>start_mac.sh</code>.",
     'server_guide_linux':"Linux: تحقق من تشغيل <code>start_ubuntu.sh</code> أو خادم vLLM.",
@@ -1682,6 +2094,14 @@ UI_TEXT = {
     'translation_complete':"اكتملت الترجمة! الوقت المستغرق: {t} قم بتنزيل النتائج أدناه.",
     'progress_init':"جارٍ تحضير نموذج الترجمة...",
     'progress_server':"جارٍ التحقق من حالة خادم الترجمة...",
+    'model_switch_stopping':"🔄 جارٍ تبديل النموذج: إيقاف الخادم الحالي وبدء {model}.",
+    'model_switch_waiting_cached':"⏳ جارٍ تحميل {model}… (مضى {elapsed}) يتم تحميل النموذج الذي سبق تنزيله من القرص. سيتم تحديث هذه الرسالة عند الاستعداد؛ لا يمكن بدء الترجمة قبل ذلك.",
+    'model_switch_waiting_download':"⏳ جارٍ تنزيل وتحميل {model}… (مضى {elapsed}) يتم جلب النموذج المستخدم لأول مرة من HuggingFace ({size}). يظهر التقدم في نافذة الطرفية. سيتم تحديث هذه الرسالة عند الاستعداد؛ لا يمكن بدء الترجمة قبل ذلك.",
+    'model_switch_ready':"✅ {model} جاهز ({elapsed}). يمكنك بدء الترجمة.",
+    'model_switch_died':"❌ توقف خادم {model} مباشرة بعد البدء. تحقق من سجل الأخطاء في نافذة الطرفية.",
+    'model_switch_timeout':"⚠️ لم يستجب خادم {model} لمدة {elapsed}؛ تم إيقاف الانتظار. تحقق من سجل الطرفية.",
+    'err_model_loading':"[تنبيه] يتم تبديل النموذج أو تحميله. ابدأ مرة أخرى عندما تُظهر حالة النموذج أنه جاهز.",
+    'genre_auto_applied':"تم اكتشاف النوع الأدبي وتطبيقه تلقائيًا: {genre}",
     'progress_files':'جارٍ تحميل الملفات',
     'lang_unknown':'غير معروف',
     'glossary_applied':'✅ **تم تطبيق {n} مصطلح.** ستُعطى هذه الأولوية خلال الترجمة.',
@@ -1699,7 +2119,15 @@ UI_TEXT = {
     'engine_ollama':'✔ موتور ترجمه Ollama فعال است',
     'engine_gemma':'✔ ترجمه Gemma 4 API فعال است',
     'engine_cli':'✔ موتور ترجمه اشتراکی CLI فعال است',
-    'cli_notice':'با حساب کاربری خودتان و سقف اشتراک خودتان اجرا می‌شود. باید خودتان CLI را نصب کرده و وارد شوید.',
+    'cli_notice':"با حساب شما و محدودیت‌های اشتراک شما اجرا می‌شود. در اولین انتخاب، CLI به‌طور خودکار نصب و ورود از طریق مرورگر آغاز می‌شود.",
+    'cli_setup_checking':"🔍 بررسی {bin} CLI…",
+    'cli_setup_installing':"⬇️ نصب {bin} CLI… ({elapsed}) نصب‌کننده رسمی در حال اجراست. پس از پایان، مرحله ورود خودکار آغاز می‌شود.",
+    'cli_setup_install_failed':"❌ نصب خودکار {bin} CLI ناموفق بود. در ترمینال نصب کنید و موتور را دوباره انتخاب کنید: {extra}",
+    'cli_setup_install_manual':"❌ {bin} CLI را نمی‌توان خودکار نصب کرد. ابتدا نصب کنید و موتور را دوباره انتخاب کنید: {extra}",
+    'cli_setup_login_wait':"🔐 ورود به {bin} لازم است. پنجره ترمینال باز شد — در مرورگر با حساب خود وارد شوید. پس از اتمام خودکار شناسایی می‌شود. ({elapsed})",
+    'cli_setup_login_manual':"🔐 ورود به {bin} لازم است. ترمینال خودکار باز نشد؛ خودتان اجرا کنید: {extra} — پس از ورود خودکار شناسایی می‌شود. ({elapsed})",
+    'cli_setup_login_timeout':"⚠️ ورود به {bin} تأیید نشد؛ انتظار متوقف شد. {extra} را در ترمینال اجرا کنید و موتور را دوباره انتخاب کنید.",
+    'cli_setup_ready':"✅ {bin} آماده است — ترجمه با حساب و محدودیت اشتراک شما.",
     'err_cli_engine':'موتور ترجمه CLI در دسترس نیست.',
     'model_label':"انتخاب مدل (E4B: سریع ≤16GB · 31B: کیفیت بالا ≥32GB، راه‌اندازی مجدد سرور هنگام تغییر)",
     'bilingual_label':"حالت نمایش دوزبانه (برای زبان‌آموزان: 'متن اصلی (ترجمه)' توصیه می‌شود)",
@@ -1730,6 +2158,11 @@ UI_TEXT = {
     'err_file_count':"نمی‌توان بیش از {n} فایل را به یکباره ترجمه کرد.",
     'err_lang_same':"زبان مبدا و مقصد یکسان است ({lang}).<br>لطفاً زبان مقصد دیگری انتخاب کنید.",
     'err_lang_detect':"تشخیص زبان کامل نشده است.<br>فایل را دوباره پیوست کنید و منتظر تشخیص بمانید.",
+    'err_partial_failure':"⚠️ ترجمه {n} فایل با خطا مواجه شد.<br>{items}فایل‌های موفق را می‌توانید در زیر دانلود کنید.",
+    'err_all_failed':"❌ ترجمه با خطا مواجه شد. هیچ فایل خروجی ساخته نشد.<br>{items}خطا را بررسی کرده و دوباره اجرا کنید. پیشرفت حفظ شده و ادامه می‌یابد.",
+    'err_failed_item':"• [{name}] {reason}<br>",
+    'err_non_ascii_path':"❌ اگر مسیر فایل یا مسیر نصب دوداری شامل نویسه‌های غیرانگلیسی باشد، ترجمه PDF با خطا مواجه می‌شود.<br>لطفاً مسیرهای زیر را به انگلیسی تغییر داده و دوباره تلاش کنید:<br>{paths}",
+    'err_non_ascii_path_hint':"(فایل: نام آن را انگلیسی کنید یا پیش از پیوست به پوشه انگلیسی منتقل کنید / پوشه نصب: به مسیر انگلیسی منتقل کنید، dodari_env را حذف کرده و دوباره نصب کنید)",
     'err_server':"[خطا] اتصال به سرور ترجمه ({url}) امکان‌پذیر نیست.<br>{guide}",
     'server_guide_mac':"Mac: بررسی کنید <code>start_mac.sh</code> در حال اجراست.",
     'server_guide_linux':"Linux: بررسی کنید <code>start_ubuntu.sh</code> یا سرور vLLM در حال اجراست.",
@@ -1740,6 +2173,14 @@ UI_TEXT = {
     'translation_complete':"ترجمه کامل شد! زمان سپری‌شده: {t} نتایج را در زیر دانلود کنید.",
     'progress_init':"در حال آماده‌سازی مدل ترجمه...",
     'progress_server':"در حال بررسی وضعیت سرور ترجمه...",
+    'model_switch_stopping':"🔄 در حال تعویض مدل: توقف سرور فعلی و راه‌اندازی {model}.",
+    'model_switch_waiting_cached':"⏳ بارگذاری {model}… ({elapsed} گذشته) مدل از پیش دانلودشده از دیسک بارگذاری می‌شود. این پیام پس از آماده شدن به‌روز می‌شود؛ پیش از آن ترجمه شروع نمی‌شود.",
+    'model_switch_waiting_download':"⏳ دانلود و بارگذاری {model}… ({elapsed} گذشته) مدلی که برای اولین بار استفاده می‌شود از HuggingFace دریافت می‌شود ({size}). پیشرفت در پنجره ترمینال نمایش داده می‌شود. این پیام پس از آماده شدن به‌روز می‌شود؛ پیش از آن ترجمه شروع نمی‌شود.",
+    'model_switch_ready':"✅ {model} آماده است ({elapsed}). می‌توانید ترجمه را شروع کنید.",
+    'model_switch_died':"❌ سرور {model} بلافاصله پس از شروع خارج شد. گزارش خطا را در پنجره ترمینال بررسی کنید.",
+    'model_switch_timeout':"⚠️ سرور {model} برای {elapsed} پاسخ نداد؛ انتظار متوقف شد. گزارش ترمینال را بررسی کنید.",
+    'err_model_loading':"[توجه] مدل در حال تعویض یا بارگذاری است. پس از آماده شدن وضعیت مدل دوباره شروع کنید.",
+    'genre_auto_applied':"ژانر به‌طور خودکار شناسایی و اعمال شد: {genre}",
     'progress_files':'در حال بارگذاری فایل‌ها',
     'lang_unknown':'ناشناخته',
     'glossary_applied':'✅ **{n} اصطلاح اعمال شد.** این‌ها در طول ترجمه اولویت خواهند داشت.',
@@ -1795,6 +2236,43 @@ def load_engine_config() -> str:
 
 def save_engine_config(engine: str):
     _write_ui_config({'engine': engine})
+
+
+def _dodari_non_ascii_paths(paths):
+    bad = []
+    for path in paths or []:
+        if not path:
+            continue
+        text = str(path)
+        if not text.isascii() and text not in bad:
+            bad.append(text)
+    return bad
+
+
+def _dodari_pipeline_failure_entry(filename, reason, limit=200):
+    text = str(reason).strip()
+    if not text:
+        text = 'Unknown error'
+    text = ' '.join(text.split())
+    if len(text) > limit:
+        text = text[:limit - 3] + '...'
+    text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    return (str(filename), text)
+
+
+def _dodari_pipeline_failure_summary(failures, success_count, translate):
+    if not failures:
+        return True, ''
+    item_tpl = translate('err_failed_item')
+    items = ''.join(
+        item_tpl.format(name=name, reason=reason) for name, reason in failures
+    )
+    if success_count > 0:
+        body = translate('err_partial_failure').format(n=len(failures), items=items)
+        return True, "<p style='color:#b8860b;line-height:1.8;'>{b}</p>".format(b=body)
+    body = translate('err_all_failed').format(items=items)
+    return False, "<p style='color:red;line-height:1.8;'>{b}</p>".format(b=body)
+
 
 
 EPUB_TRANSLATE_TAGS = {'div', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'span', 'td', 'th', 'blockquote'}
@@ -1856,6 +2334,9 @@ class Dodari:
         _saved = load_ui_config()
         self.ui_lang = _saved if _saved else detect_ui_language()
 
+        self.model_loading = False
+        self.genre_inference_failed = False
+        self.llm_proc = None
         _engine = load_engine_config()
         if _dodari_cli_is_engine(_engine):
             self.gemma_model = _engine
@@ -1981,6 +2462,7 @@ class Dodari:
                         cli_notice_md = gr.Markdown(
                             f"<p style='color:#888;font-size:0.85em;'>{self._T('cli_notice')}</p>"
                         )
+                        self.model_status_html = gr.HTML('')
                 with gr.Column(scale=1, min_width=300):
                     with gr.Tab(self._T('step3')) as tab3:
                         self.bilingual_order_radio = gr.Radio(
@@ -2013,7 +2495,27 @@ class Dodari:
                             self.glossary_count_md = gr.Markdown(self._T('glossary_count').format(n=0))
                             glossary_desc_md = gr.Markdown(self._T('glossary_desc'))
 
-                        self.model_radio.change(fn=self.reload_llm_server, inputs=[self.model_radio])
+                        def on_model_change(new_model):
+                            for status in self.reload_llm_server(new_model):
+                                yield gr.update(), status
+                            yield gr.update(value=f"<p style='color:green;'>{self._engine_label()}</p>"), gr.update()
+
+                        self.model_radio.change(
+                            fn=on_model_change,
+                            inputs=[self.model_radio],
+                            outputs=[engine_html, self.model_status_html],
+                        )
+
+                        def on_app_load_cli_setup():
+                            if not _dodari_cli_is_engine(self.gemma_model) or self.cli_preflight_done:
+                                yield gr.update()
+                                return
+                            ok = False
+                            for status_html, ok in self._cli_engine_setup(self.gemma_model):
+                                yield status_html
+                            self.cli_preflight_done = ok
+
+                        self.app.load(fn=on_app_load_cli_setup, outputs=[self.model_status_html])
 
                         def on_origin_lang_change(lang_name):
                             if lang_name and lang_name in SUPPORTED_LANGUAGES:
@@ -2266,14 +2768,85 @@ class Dodari:
             ui_lang_dropdown.change(fn=on_ui_lang_change, inputs=[ui_lang_dropdown], outputs=_live_outputs)
 
         self.app.queue().launch(
-            share=True,
+            share=False,
             inbrowser=True,
             favicon_path='imgs/dodari.png',
             allowed_paths=['.', './outputs']
         )
 
+    def _cli_engine_setup(self, engine):
+        T = self._T
+        binary = CLI_BINARIES.get(engine, engine)
+        plat = platform.system()
+        yield _dodari_cli_setup_message(T, 'checking', binary), False
+        _dodari_cli_refresh_path(plat)
+
+        if not shutil.which(binary):
+            cmd = _dodari_cli_install_cmd(engine, plat)
+            if cmd is None or (engine == ENGINE_CODEX_CLI and not shutil.which('npm')):
+                hint = CLI_INSTALL_HINTS.get(engine, '')
+                if engine == ENGINE_CODEX_CLI:
+                    hint = f'Node.js (https://nodejs.org) → {hint}'
+                    try:
+                        webbrowser.open('https://nodejs.org/')
+                    except Exception:
+                        pass
+                print(f'[CLI Setup] {binary} not installed and no automatic installer: {hint}')
+                yield _dodari_cli_setup_message(T, 'install_manual', binary, 0, hint), False
+                return
+            print(f'[CLI Setup] Installing {binary}: {cmd}')
+            log = tempfile.NamedTemporaryFile('w+', suffix='.log', prefix=f'dodari_{binary}_install_', delete=False)
+            proc = subprocess.Popen(cmd, shell=True, stdout=log, stderr=subprocess.STDOUT)
+            t0 = time.time()
+            while proc.poll() is None and time.time() - t0 < CLI_INSTALL_TIMEOUT_SEC:
+                yield _dodari_cli_setup_message(T, 'installing', binary, time.time() - t0), False
+                time.sleep(2)
+            if proc.poll() is None:
+                proc.kill()
+            log.close()
+            try:
+                with open(log.name, encoding='utf-8', errors='replace') as fp:
+                    print(fp.read()[-1500:])
+            except OSError:
+                pass
+            _dodari_cli_refresh_path(plat)
+            if proc.returncode != 0 or not shutil.which(binary):
+                print(f'[CLI Setup] {binary} install failed (rc={proc.returncode}, log={log.name})')
+                yield _dodari_cli_setup_message(T, 'install_failed', binary, 0, CLI_INSTALL_HINTS.get(engine, '')), False
+                return
+            print(f'[CLI Setup] {binary} installed: {shutil.which(binary)}')
+
+        if _dodari_cli_auth_status(engine, binary) is False:
+            login_cmd = _dodari_cli_login_cmd(engine, binary)
+            opened = _dodari_cli_open_terminal(plat, login_cmd)
+            print(f'[CLI Setup] login required → {login_cmd} (terminal opened: {opened})')
+            state = 'login_wait' if opened else 'login_manual'
+            t0 = time.time()
+            logged_in = False
+            while time.time() - t0 < CLI_LOGIN_TIMEOUT_SEC:
+                yield _dodari_cli_setup_message(T, state, binary, time.time() - t0, login_cmd), False
+                time.sleep(3)
+                if _dodari_cli_auth_status(engine, binary) is True:
+                    logged_in = True
+                    break
+            if not logged_in:
+                yield _dodari_cli_setup_message(T, 'login_timeout', binary, 0, login_cmd), False
+                return
+            print(f'[CLI Setup] {binary} login confirmed')
+
+        ok, detail = _dodari_cli_preflight(engine)
+        print(f'[CLI Setup] preflight: {detail}')
+        if ok:
+            gr.Info(f'✅ {engine}')
+            yield _dodari_cli_setup_message(T, 'ready', binary), True
+        else:
+            gr.Warning(detail)
+            _safe = detail.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('\n', '<br>')
+            yield f"<p style='color:red;'>{_safe}</p>", False
+
     def reload_llm_server(self, new_model: str):
         if self.gemma_model == new_model:
+            yield gr.update()
             return
 
         if _dodari_cli_is_engine(new_model):
@@ -2282,13 +2855,10 @@ class Dodari:
             save_engine_config(new_model)
             print(f"\n[Engine Switch] CLI engine selected: {new_model}")
             print(f"[Engine Switch] batch={self.translate_batch_size}, workers={self.translate_workers}")
-            ok, detail = _dodari_cli_preflight(new_model)
+            ok = False
+            for status_html, ok in self._cli_engine_setup(new_model):
+                yield status_html
             self.cli_preflight_done = ok
-            print(f'[Engine Switch] preflight: {detail}')
-            if ok:
-                gr.Info(f'{new_model} ready. Runs on your own account and subscription limits.')
-            else:
-                gr.Warning(detail)
             return
 
         if _dodari_cli_is_engine(self.gemma_model):
@@ -2296,6 +2866,7 @@ class Dodari:
             self.cli_preflight_done = False
             self.translate_workers = self._default_translate_workers()
 
+        model_short = new_model.split('/')[-1]
         print(f"\n[Model Switch] Loading {new_model} server...")
         gr.Info(f"Switching model to {new_model}. Please wait.")
         self.gemma_model = new_model
@@ -2305,11 +2876,26 @@ class Dodari:
         else:
             self.translate_batch_size = 15
 
-        cleanup_llm_server()
-
         current_platform = platform.system()
 
+        if current_platform == 'Windows':
+            print(f"[Model Switch] Windows(Ollama): no restart needed, switching → {new_model}")
+            gr.Info(f"Ollama model switched to {new_model}. (No server restart needed)")
+            yield _dodari_model_switch_message(self._T, 'ready', model_short, 0)
+            return
+        if current_platform not in ('Darwin', 'Linux'):
+            print(f"[Model Switch] Unsupported platform: {current_platform}")
+            gr.Warning(f"Platform '{current_platform}' is not supported.")
+            yield f"<p style='color:red;'>Unsupported platform: {current_platform}</p>"
+            return
+
+        self.model_loading = True
+        yield _dodari_model_switch_message(self._T, 'stopping', model_short)
+
+        cleanup_llm_server()
+
         if current_platform == 'Darwin':
+            server_env, cached = _dodari_llm_server_env(new_model)
             mlx_python = os.environ.get('MLX_PYTHON', sys.executable)
             cmd = (
                 f"{mlx_python} -m mlx_vlm.server "
@@ -2318,10 +2904,10 @@ class Dodari:
                 f"--port 8000"
             )
             print(f"[Model Switch] Mac(MLX) params: batch={self.translate_batch_size}, workers={self.translate_workers}, kv-bits={self.kv_bits}")
-            subprocess.Popen(cmd, shell=True)
+            print(f"[Model Switch] HF cache: {'complete snapshot found → offline, no download' if cached else 'not cached → will download from HuggingFace'}")
+            self.llm_proc = subprocess.Popen(cmd, shell=True, env=server_env)
             _dodari_mark_llm_started()
-
-        elif current_platform == 'Linux':
+        else:
             vllm_model = os.environ.get('VLLM_MODEL', 'cyankiwi/gemma-4-31B-it-AWQ-4bit')
             vllm_python = os.environ.get('VLLM_PYTHON', sys.executable)
             cmd = _dodari_vllm_server_cmd(
@@ -2332,23 +2918,17 @@ class Dodari:
                 quantization=os.environ.get('VLLM_QUANT', VLLM_DEFAULT_QUANT),
             )
             print(f"[Model Switch] Linux(vLLM) model: {vllm_model}")
-            subprocess.Popen(cmd, shell=True)
+            self.llm_proc = subprocess.Popen(cmd, shell=True)
             _dodari_mark_llm_started()
+            cached = True
 
-        elif current_platform == 'Windows':
-            print(f"[Model Switch] Windows(Ollama): no restart needed, switching → {new_model}")
-            gr.Info(f"Ollama model switched to {new_model}. (No server restart needed)")
-            return
-
-        else:
-            print(f"[Model Switch] Unsupported platform: {current_platform}")
-            gr.Warning(f"Platform '{current_platform}' is not supported.")
-            return
-
-        model_short = new_model.split('/')[-1]
         _base_url = self.gemma_api_url.rsplit('/v1/', 1)[0]
+        size_hint = MODEL_DOWNLOAD_SIZES.get(new_model, '')
+        t0 = time.time()
         model_confirmed = False
-        for attempt in range(30):
+        outcome = 'timeout'
+        polls = 0
+        while time.time() - t0 < MODEL_SWITCH_TIMEOUT_SEC:
             try:
                 resp = requests.get(f'{_base_url}/v1/models', timeout=3)
                 if resp.status_code == 200:
@@ -2358,21 +2938,29 @@ class Dodari:
                         break
             except Exception:
                 pass
-            print(f'[Model Loading] {attempt + 1}/30, retrying in 2s...')
+            if self.llm_proc is not None and self.llm_proc.poll() is not None:
+                outcome = 'died'
+                break
+            elapsed = time.time() - t0
+            if polls % 15 == 0:
+                print(f'[Model Loading] {model_short} not ready yet ({_dodari_format_elapsed(elapsed)} elapsed)...')
+            yield _dodari_model_switch_message(self._T, 'waiting', model_short, elapsed, cached, size_hint)
+            polls += 1
             time.sleep(2)
 
+        self.model_loading = False
+        elapsed = time.time() - t0
         if model_confirmed:
             print(f"\n{'=' * 60}")
-            print(f"  Active model: {model_short}")
+            print(f"  Active model: {model_short}  ({_dodari_format_elapsed(elapsed)})")
             print(f"  batch={self.translate_batch_size}  workers={self.translate_workers}  kv-bits={self.kv_bits}")
             print(f"{'=' * 60}\n")
             gr.Info(f"[{model_short}] Model loaded successfully!")
+            yield _dodari_model_switch_message(self._T, 'ready', model_short, elapsed)
         else:
-            print(f"\n{'!' * 60}")
-            print(f"  Model response check failed: {model_short}")
-            print(f"  Check the server log (terminal or nohup.out)")
-            print(f"{'!' * 60}\n")
-            gr.Warning("Model server did not respond. Translation may fail.")
+            print(f"\n[Model Switch] {model_short} not confirmed: {outcome} after {_dodari_format_elapsed(elapsed)}")
+            gr.Warning(f"Model server did not respond ({outcome}). Check the terminal log.")
+            yield _dodari_model_switch_message(self._T, outcome, model_short, elapsed)
 
     def format_result_message(self, sec_or_msg):
         if not sec_or_msg:
@@ -2396,6 +2984,32 @@ class Dodari:
         if not self.selected_files:
             return None, f"<p style='color:red;'>{self._T('err_file_none')}</p>"
 
+        _has_pdf = any(
+            os.path.splitext(f['orig_name'])[1].lower() == '.pdf' for f in self.selected_files
+        )
+        if os.name == 'nt' and _has_pdf:
+            _check_paths = [
+                os.path.abspath(f['path'])
+                for f in self.selected_files
+                if os.path.splitext(f['orig_name'])[1].lower() == '.pdf'
+            ]
+            _check_paths.append(os.path.abspath(os.path.dirname(__file__)))
+            _check_paths.append(os.path.abspath(sys.prefix))
+            _bad_paths = _dodari_non_ascii_paths(_check_paths)
+            if _bad_paths:
+                print(f'[Path Check] Non-ASCII path blocks PDF translation: {_bad_paths}')
+                _rows = ''.join(
+                    "• {p}<br>".format(p=p.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
+                    for p in _bad_paths
+                )
+                _msg = (
+                    "<p style='color:red;line-height:1.8;'>"
+                    + self._T('err_non_ascii_path').format(paths=_rows)
+                    + self._T('err_non_ascii_path_hint')
+                    + "</p>"
+                )
+                return None, _msg
+
         self.start = time.time()
         print("Start! now.." + str(self.start))
         progress(0, desc=self._T('progress_init'))
@@ -2411,6 +3025,8 @@ class Dodari:
                 self.cli_preflight_done = True
             print(f'CLI engine ready for translation: {self.gemma_model}')
         else:
+            if self.model_loading:
+                return None, f"<p style='color:red;'>{self._T('err_model_loading')}</p>"
             _base_url = self.gemma_api_url.rsplit('/v1/', 1)[0]
             progress(0, desc=self._T('progress_server'))
             server_ok = False
@@ -2437,6 +3053,14 @@ class Dodari:
                     f"<p style='color:red;'>{self._T('err_server').format(url=_base_url, guide=_guide)}</p>"
                 )
             print('Gemma API ready for translation')
+            if self.genre_inference_failed and genre_val == GENRE_CHOICES_KO[-1] and self.selected_files:
+                _first_name = os.path.splitext(self.selected_files[0]['orig_name'])[0]
+                _regenre = self.auto_detect_genre(_first_name)
+                if not self.genre_inference_failed and _regenre != genre_val:
+                    print(f'[Genre] Re-detected at translation start: {_regenre}')
+                    gr.Info(self._T('genre_auto_applied').format(genre=_regenre))
+                    genre_val = _regenre
+            self.genre_inference_failed = False
 
         if not self.origin_lang:
             return None, f"<p style='color:red;'>{self._T('err_lang_detect')}</p>"
@@ -2452,6 +3076,8 @@ class Dodari:
         origin_abb = self.origin_lang
         target_abb = target_iso
         all_file_path = []
+        pipeline_failures = []
+        pipeline_success_count = 0
 
         for file in progress.tqdm(self.selected_files, desc=self._T('progress_files')):
             print(f'file: {file}')
@@ -2488,6 +3114,7 @@ class Dodari:
                             print(f'[EPUB] Extraction failed, skipping file: {file["orig_name"]}')
                             self.remove_folder(self.temp_folder_1)
                             self.remove_folder(self.temp_folder_2)
+                            pipeline_failures.append(_dodari_pipeline_failure_entry(file['orig_name'], 'EPUB extraction failed'))
                             extract_failed = True
                             break
                     if extract_failed:
@@ -2635,6 +3262,7 @@ class Dodari:
                     except DodariCliError as err:
                         print(f'[CLI Engine] Translation stopped: {err}')
                         print('[Translation] Aborting this file. Progress is preserved, rerun to resume.')
+                        pipeline_failures.append(_dodari_pipeline_failure_entry(file['orig_name'], err))
                         chapter_failed = True
                         break
                     except Exception as err:
@@ -2665,6 +3293,7 @@ class Dodari:
 
                 _dodari_resume_cleanup(self.temp_folder_1)
                 _dodari_resume_cleanup(self.temp_folder_2)
+                pipeline_success_count += 1
 
             elif '.pdf' in ext:
                 print(f'[PDF] Starting: {name}{ext}')
@@ -2672,6 +3301,7 @@ class Dodari:
 
                 if not DOCLING_AVAILABLE:
                     print('[PDF] Error: docling not installed. Run: pip install docling')
+                    pipeline_failures.append(_dodari_pipeline_failure_entry(file['orig_name'], 'docling is not installed (pip install docling)'))
                     continue
 
                 try:
@@ -3164,12 +3794,14 @@ class Dodari:
                     all_file_path.extend([done_path_1, done_path_2])
                     print(f'[PDF] Success! EPUB created: {done_path_1}, {done_path_2}')
                     _dodari_resume_cleanup(self.temp_folder_1)
+                    pipeline_success_count += 1
 
                 except Exception as err:
                     import traceback
                     print(f'[PDF] Error: {err}')
                     traceback.print_exc()
                     print('[PDF] Progress is preserved, rerun to resume.')
+                    pipeline_failures.append(_dodari_pipeline_failure_entry(file['orig_name'], err))
                     continue
 
             else:
@@ -3205,6 +3837,7 @@ class Dodari:
                     self.finalize_file_streams(book, output_file_1, output_file_2)
                     print(f'[TXT Translation] Failed: {err}')
                     print('[TXT Translation] Progress is preserved, rerun to resume.')
+                    pipeline_failures.append(_dodari_pipeline_failure_entry(file['orig_name'], err))
                     continue
 
                 translated_particle_1 = ' '.join(particle_list_1)
@@ -3214,8 +3847,19 @@ class Dodari:
                 all_file_path.extend([output_file_1.name, output_file_2.name])
                 self.finalize_file_streams(book, output_file_1, output_file_2)
                 _dodari_resume_cleanup(self.temp_folder_1)
+                pipeline_success_count += 1
 
         sec = self.reset_session_and_gc()
+
+        print(f'[Pipeline] Finished: {pipeline_success_count} succeeded, {len(pipeline_failures)} failed')
+
+        failure_ok, failure_msg = _dodari_pipeline_failure_summary(
+            pipeline_failures, pipeline_success_count, self._T
+        )
+        if not failure_ok:
+            return all_file_path, failure_msg
+        if failure_msg:
+            return all_file_path, failure_msg + f"<p>{self._T('translation_complete').format(t=sec)}</p>"
 
         return all_file_path, sec
 
@@ -3668,6 +4312,7 @@ class Dodari:
         return particle_list_1, particle_list_2
 
     def auto_detect_genre(self, filename: str) -> str:
+        self.genre_inference_failed = False
         prompt = (
             f"The title of a book or document is '{filename}'. Which literary genre does it most likely belong to?\n"
             "Choose EXACTLY ONE from this list: [IT 및 엔지니어링, 문학 및 소설, 인문 및 사회과학, 비즈니스 및 경제, 영상 및 대본, 일반 문서(기본)].\n"
@@ -3689,6 +4334,7 @@ class Dodari:
                     return g
         except Exception as err:
             print(f'Genre inference failed: {err}')
+            self.genre_inference_failed = True
         return "일반 문서(기본)"
 
     def on_file_upload(self, files: Sequence):

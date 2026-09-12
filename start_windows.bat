@@ -2,12 +2,11 @@
 chcp 65001 >nul
 setlocal enabledelayedexpansion
 
-rem === Step 0: Choose translation engine (asked once, stored in ui_config.json) ===
-rem   local      : local AI model (existing behaviour, installs Ollama + model)
-rem   claude-cli : your own Claude subscription via the official claude CLI
-rem   codex-cli  : your own ChatGPT subscription via the official Codex CLI
-rem CLI engines run on YOUR account and YOUR subscription limits.
-rem You install and log in to the CLI yourself; Dodari never provides an account.
+rem === Step 0: Read translation engine saved by the Dodari UI (ui_config.json) ===
+rem The engine is chosen inside the Dodari UI (model selector), never here.
+rem   local      : local AI model (default, installs Ollama + model)
+rem   claude-cli : Claude subscription via the claude CLI
+rem   codex-cli  : ChatGPT subscription via the Codex CLI
 set CONFIG_FILE=%~dp0ui_config.json
 set DODARI_ENGINE=
 
@@ -33,127 +32,9 @@ if exist "%CONFIG_FILE%" (
     for /f "usebackq delims=" %%e in (`%CFG_PY% -c "import json,sys;d=json.load(open(sys.argv[1],encoding='utf-8'));e=d.get('engine','');print(e if e in ('local','claude-cli','codex-cli') else '')" "%CONFIG_FILE%" 2^>nul`) do set DODARI_ENGINE=%%e
 )
 
-if "%DODARI_ENGINE%"=="" (
-    echo.
-    echo ==================================================
-    echo  Choose a translation engine ^(asked only once^)
-    echo ==================================================
-    echo   1^) Local AI model       - free, installs Ollama + model ^(approx. 5GB^)
-    echo   2^) Claude subscription  - uses YOUR Claude account ^(Pro/Max^)
-    echo   3^) ChatGPT subscription - uses YOUR ChatGPT account ^(Plus/Pro^)
-    echo.
-    echo   Options 2 and 3 run on your own account and your own
-    echo   subscription limits. The CLI is installed and logged in by you.
-    echo.
-    set /p ENGINE_CHOICE="Enter 1, 2 or 3 [1]: "
-    if "!ENGINE_CHOICE!"=="2" (
-        set DODARI_ENGINE=claude-cli
-    ) else if "!ENGINE_CHOICE!"=="3" (
-        set DODARI_ENGINE=codex-cli
-    ) else (
-        set DODARI_ENGINE=local
-    )
-    %CFG_PY% -c "import json,os,sys;p,e=sys.argv[1],sys.argv[2];d={};d.update(json.load(open(p,encoding='utf-8')) if os.path.exists(p) else {});d['engine']=e;json.dump(d,open(p,'w',encoding='utf-8'),ensure_ascii=False)" "%CONFIG_FILE%" "!DODARI_ENGINE!" 2>nul
-    echo   Selected engine: !DODARI_ENGINE!
-    echo.
-)
+if "%DODARI_ENGINE%"=="" set DODARI_ENGINE=local
 
 echo Translation engine: %DODARI_ENGINE%
-
-if "%DODARI_ENGINE%"=="claude-cli" goto SETUP_CLAUDE_CLI
-if "%DODARI_ENGINE%"=="codex-cli" goto SETUP_CODEX_CLI
-goto ENGINE_SETUP_DONE
-
-:SETUP_CLAUDE_CLI
-echo.
-echo [CLI] Checking claude CLI...
-where claude >nul 2>&1
-if not errorlevel 1 goto CLAUDE_LOGIN
-
-echo   claude CLI is not installed. Installing now...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://claude.ai/install.ps1 | iex"
-where claude >nul 2>&1
-if errorlevel 1 (
-    echo.
-    echo [Notice] claude CLI installed, but PATH refresh requires a new terminal.
-    echo Please close this window and run start_windows.bat again.
-    pause
-    exit /b 1
-)
-
-:CLAUDE_LOGIN
-echo   Checking claude CLI login status...
-echo ok| claude -p --output-format json --tools "" --disable-slash-commands --strict-mcp-config --settings "{}" 2>nul | findstr /c:"\"is_error\":false" >nul
-if not errorlevel 1 goto CLI_READY
-
-echo.
-echo   You are not logged in to the claude CLI yet.
-echo   A browser window will open for a one-time login.
-echo   Finish the login, then return to this window.
-echo.
-claude /login
-echo ok| claude -p --output-format json --tools "" --disable-slash-commands --strict-mcp-config --settings "{}" 2>nul | findstr /c:"\"is_error\":false" >nul
-if errorlevel 1 (
-    echo.
-    echo [Error] claude CLI login could not be confirmed.
-    echo Please log in manually by running: claude
-    pause
-    exit /b 1
-)
-goto CLI_READY
-
-:SETUP_CODEX_CLI
-echo.
-echo [CLI] Checking Codex CLI...
-where codex >nul 2>&1
-if not errorlevel 1 goto CODEX_LOGIN
-
-echo   Codex CLI is not installed. Installing via npm...
-where npm >nul 2>&1
-if errorlevel 1 (
-    echo.
-    echo [Error] npm is required to install the Codex CLI.
-    echo Please install Node.js and run this script again: https://nodejs.org/
-    start https://nodejs.org/
-    pause
-    exit /b 1
-)
-call npm install -g @openai/codex
-where codex >nul 2>&1
-if errorlevel 1 (
-    echo.
-    echo [Notice] Codex CLI installed, but PATH refresh requires a new terminal.
-    echo Please close this window and run start_windows.bat again.
-    pause
-    exit /b 1
-)
-
-:CODEX_LOGIN
-echo   Checking Codex CLI login status...
-codex login status >nul 2>&1
-if not errorlevel 1 goto CLI_READY
-
-echo.
-echo   You are not logged in to the Codex CLI yet.
-echo   A browser window will open for a one-time login.
-echo   Finish the login, then return to this window.
-echo.
-codex login
-codex login status >nul 2>&1
-if errorlevel 1 (
-    echo.
-    echo [Error] Codex CLI login could not be confirmed.
-    echo Please log in manually by running: codex login
-    pause
-    exit /b 1
-)
-goto CLI_READY
-
-:CLI_READY
-echo   Done - %DODARI_ENGINE% ready
-
-:ENGINE_SETUP_DONE
-
 
 rem === Step 1: Check Python 3.11+ ===
 echo [1/6] Checking Python installation...

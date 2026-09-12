@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# === Translation engine selection ===
-# Asked once on first run, then stored in ui_config.json ("engine" key).
-#   local      : local AI model (existing behaviour, downloads the model)
-#   claude-cli : your own Claude subscription via the official claude CLI
-#   codex-cli  : your own ChatGPT subscription via the official Codex CLI
-# CLI engines run on YOUR account and YOUR subscription limits.
-# You install and log in to the CLI yourself; Dodari never provides an account.
+# === Translation engine ===
+# The engine is chosen inside the Dodari UI (model selector) and stored in
+# ui_config.json under the "engine" key. This script only reads that value to
+# decide whether the local model stack needs to be installed and started.
+#   local      : local AI model (default)
+#   claude-cli : Claude subscription via the claude CLI
+#   codex-cli  : ChatGPT subscription via the Codex CLI
 CONFIG_FILE="ui_config.json"
 DODARI_ENGINE=""
 
@@ -25,125 +25,11 @@ except Exception:
 PYEOF
 }
 
-save_engine_to_config() {
-    python3 - "$CONFIG_FILE" "$1" <<'PYEOF' 2>/dev/null
-import json, os, sys
-path, engine = sys.argv[1], sys.argv[2]
-data = {}
-if os.path.exists(path):
-    try:
-        with open(path, encoding='utf-8') as fp:
-            loaded = json.load(fp)
-        if isinstance(loaded, dict):
-            data = loaded
-    except Exception:
-        data = {}
-data['engine'] = engine
-with open(path, 'w', encoding='utf-8') as fp:
-    json.dump(data, fp, ensure_ascii=False)
-PYEOF
-}
-
 DODARI_ENGINE=$(read_engine_from_config)
 
-if [ -z "$DODARI_ENGINE" ]; then
-    echo ""
-    echo "=================================================="
-    echo " Choose a translation engine (asked only once)"
-    echo "=================================================="
-    echo "  1) Local AI model      - free, downloads a model, needs a capable Mac"
-    echo "  2) Claude subscription - uses YOUR Claude account (Pro/Max)"
-    echo "  3) ChatGPT subscription- uses YOUR ChatGPT account (Plus/Pro)"
-    echo ""
-    echo "  Options 2 and 3 run on your own account and your own"
-    echo "  subscription limits. The CLI is installed and logged in by you."
-    echo ""
-    printf "Enter 1, 2 or 3 [1]: "
-    read -r ENGINE_CHOICE
-    case "$ENGINE_CHOICE" in
-        2) DODARI_ENGINE="claude-cli" ;;
-        3) DODARI_ENGINE="codex-cli" ;;
-        *) DODARI_ENGINE="local" ;;
-    esac
-    save_engine_to_config "$DODARI_ENGINE"
-    echo "Selected engine: $DODARI_ENGINE (saved to $CONFIG_FILE)"
-    echo ""
-fi
+[ -z "$DODARI_ENGINE" ] && DODARI_ENGINE="local"
 
 echo "Translation engine: $DODARI_ENGINE"
-
-# Install and log in to the selected CLI (only for the subscription engines)
-setup_cli_engine() {
-    local bin_name="$1" install_cmd="$2" login_cmd="$3"
-
-    if ! command -v "$bin_name" &>/dev/null; then
-        echo ""
-        echo "$bin_name CLI is not installed. Installing now..."
-        eval "$install_cmd"
-        hash -r
-        # Fresh installs often land in these locations before PATH is refreshed
-        for extra in "$HOME/.local/bin" "$HOME/.claude/bin" "/opt/homebrew/bin" "/usr/local/bin"; do
-            [ -d "$extra" ] && PATH="$extra:$PATH"
-        done
-        export PATH
-        if ! command -v "$bin_name" &>/dev/null; then
-            echo ""
-            echo "Could not find $bin_name after installation."
-            echo "Open a new terminal and run start_mac.sh again,"
-            echo "or install it manually with: $install_cmd"
-            exit 1
-        fi
-    fi
-    echo "$bin_name CLI found: $(command -v "$bin_name")"
-
-    if ! $login_cmd; then
-        echo ""
-        echo "Login check failed for $bin_name. Please complete the login and rerun."
-        exit 1
-    fi
-}
-
-# Returns 0 when the claude CLI is logged in with a subscription account
-claude_login_ok() {
-    local out
-    out=$(printf 'ok' | claude -p --output-format json --tools "" \
-        --disable-slash-commands --strict-mcp-config --settings '{}' 2>/dev/null)
-    case "$out" in
-        *'"is_error":false'*) return 0 ;;
-    esac
-
-    echo ""
-    echo "You are not logged in to the claude CLI yet."
-    echo "A browser window will open for a one-time login."
-    echo "Finish the login, then return to this window."
-    echo ""
-    claude /login || claude
-    out=$(printf 'ok' | claude -p --output-format json --tools "" \
-        --disable-slash-commands --strict-mcp-config --settings '{}' 2>/dev/null)
-    case "$out" in
-        *'"is_error":false'*) return 0 ;;
-    esac
-    return 1
-}
-
-codex_login_ok() {
-    if codex login status >/dev/null 2>&1; then
-        return 0
-    fi
-    echo ""
-    echo "You are not logged in to the Codex CLI yet."
-    echo "A browser window will open for a one-time login."
-    echo "Finish the login, then return to this window."
-    echo ""
-    codex login || return 1
-    codex login status >/dev/null 2>&1
-}
-
-if [ "$DODARI_ENGINE" = "claude-cli" ]; then
-    setup_cli_engine "claude" "curl -fsSL https://claude.ai/install.sh | bash" claude_login_ok
-elif [ "$DODARI_ENGINE" = "codex-cli" ]; then
-    setup_cli_engine "codex" "npm install -g @openai/codex" codex_login_ok
-fi
 
 # Search for Python 3.11+ (highest version first)
 PYTHON_CMD=""
@@ -220,7 +106,34 @@ if [ "$DODARI_ENGINE" = "local" ]; then
     export MLX_PYTHON=$(dodari_env/bin/python3 -c "import sys; print(sys.executable)")
     echo "MLX Python path: $MLX_PYTHON"
 
-    dodari_env/bin/python3 -m mlx_vlm.server --model mlx-community/gemma-4-31b-it-4bit --kv-bits 8 --port 8000 &
+    MLX_MODEL="mlx-community/gemma-4-31b-it-4bit"
+    # Reuse the already-downloaded model when the HuggingFace cache holds a complete copy — never re-download.
+    # Only the server process gets HF_HUB_OFFLINE; dodari.py itself stays online (Docling downloads its own models).
+    MLX_ENV=""
+    if dodari_env/bin/python3 - "$MLX_MODEL" <<'PYEOF'
+import json, os, sys
+model = sys.argv[1]
+hub = os.environ.get('HF_HUB_CACHE') or os.path.join(os.environ.get('HF_HOME', os.path.expanduser('~/.cache/huggingface')), 'hub')
+repo = os.path.join(hub, 'models--' + model.replace('/', '--'))
+try:
+    sha = open(os.path.join(repo, 'refs', 'main'), encoding='utf-8').read().strip()
+    snap = os.path.join(repo, 'snapshots', sha)
+    idx = os.path.join(snap, 'model.safetensors.index.json')
+    need = set(json.load(open(idx, encoding='utf-8'))['weight_map'].values()) if os.path.exists(idx) else {'model.safetensors'}
+    need.add('config.json')
+    ok = all(os.path.exists(os.path.realpath(os.path.join(snap, f))) for f in need)
+except Exception:
+    ok = False
+sys.exit(0 if ok else 1)
+PYEOF
+    then
+        MLX_ENV="HF_HUB_OFFLINE=1"
+        echo "Model $MLX_MODEL found in the local HuggingFace cache — offline mode, no re-download."
+    else
+        echo "Model $MLX_MODEL is not in the local cache yet — it will be downloaded from HuggingFace (progress below)."
+    fi
+
+    env $MLX_ENV dodari_env/bin/python3 -m mlx_vlm.server --model "$MLX_MODEL" --kv-bits 8 --port 8000 &
     SERVER_PID=$!
 
     # Shut down the API server safely when Dodari exits (Ctrl+C)

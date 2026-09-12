@@ -193,6 +193,8 @@ Control Panel → Programs → Uninstall Ollama
 * 2026.08.11 Much faster PDF chunk processing by skipping OCR for text-based PDFs. Fixed Gemma4 adding translator notes to translations.
 * 2026.08.13 Updated the sentence-splitting library (NLTK) to a version that patches security advisories with [Xuuyuan](https://github.com/Xuuyuan)
 * 2026.08.24 Added multi-GPU tensor parallelism support on Ubuntu (VLLM_TP) and selectable quantization (VLLM_QUANT) with [polbel11](https://github.com/polbel11)
+* 2026.08.24 Reconnecting after a dropped browser session now restores translation progress and download list
+* 2026.09.12 Fixed the status showing "translation complete" with no output when PDF conversion failed. Added an error message that cancels the translation when the attached file path contains Korean (non-ASCII) characters. The model is now selected after Dodari starts, inside the UI.
 <br/>
 
 ---

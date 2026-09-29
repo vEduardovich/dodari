@@ -22,6 +22,7 @@ https://github.com/vEduardovich/dodari 도다리 설치해줘
 2. AI가 허용을 물으면 "허용"
 3. 로그인 창이 뜨면 로그인 후 "계속"
 4. 도다리 창이면 정상설치 완료
+<img src='https://github.com/user-attachments/assets/88de4af0-6d7c-4145-b82e-7318a1710385' title='도다리'/>
 
 ## 소개
 ### 주요기능

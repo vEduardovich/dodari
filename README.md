@@ -22,6 +22,7 @@ https://github.com/vEduardovich/dodari install Dodari
 2. If the AI asks for permission, "Allow"
 3. When the login window opens, sign in, then "Continue"
 4. When the Dodari window opens, installation is complete
+<img src='https://github.com/user-attachments/assets/88de4af0-6d7c-4145-b82e-7318a1710385' title='Dodari'/>
 
 ## Overview
 ### Key Features

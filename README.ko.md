@@ -12,8 +12,8 @@
 <img src='https://github.com/user-attachments/assets/2f27d751-b037-4204-8ffc-fd9e16b89015' title='도다리'/>
 
 ## AI로 설치하기
-필요 앱 : Codex 또는 Claude Code
-최소 요금제: ChatGPT Plus이상 또는 Claude Pro이상
+* 필요 앱 : Codex 또는 Claude Code
+* 최소 요금제: ChatGPT Plus이상 또는 Claude Pro이상
 
 1. 프롬프트 입력
 ```bash

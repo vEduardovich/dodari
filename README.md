@@ -12,8 +12,8 @@ Dodari 2 is a multilingual AI translator that translates <br/>EPUB, PDF, and TXT
 <img src='https://github.com/user-attachments/assets/835a52f7-c3c4-4ab8-972c-37e299afe316' title='Dodari'/>
 
 ## Install with AI
-Required app: Codex or Claude Code
-Minimum plan: ChatGPT Plus or higher, or Claude Pro or higher
+* Required app: Codex or Claude Code
+* Minimum plan: ChatGPT Plus or higher, or Claude Pro or higher
 
 1. Enter this prompt
 ```bash

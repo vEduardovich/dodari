@@ -13,7 +13,7 @@
 
 ## AI로 설치하기
 필요 앱 : Codex 또는 Claude Code
-필요 모델: ChatGPT Plus이상 또는 Claude Pro이상
+최소 요금제: ChatGPT Plus이상 또는 Claude Pro이상
 
 1. 프롬프트 입력
 ```bash

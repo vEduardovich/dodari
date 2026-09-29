@@ -222,13 +222,11 @@ Control Panel → Programs → Uninstall Ollama
 * 2026.08.24 Added multi-GPU tensor parallelism support on Ubuntu (VLLM_TP) and selectable quantization (VLLM_QUANT) with [polbel11](https://github.com/polbel11)
 * 2026.08.24 Reconnecting after a dropped browser session now restores translation progress and download list
 * 2026.09.12 Fixed the status showing "translation complete" with no output when PDF conversion failed. Added an error message that cancels the translation when the attached file path contains Korean (non-ASCII) characters. The model is now selected after Dodari starts, inside the UI.
-* 2026.09.27 Subscription CLI engines: choose the model and reasoning effort from dropdowns (defaults are built in and can be changed in your own `dodari_config.json`, your last choice is remembered). Outdated CLIs are updated automatically when a model needs a newer version. Failed batches are retried, split in half, and as a last resort the sentence keeps its source text instead of failing the whole file. ChatGPT (Codex) now runs isolated with its own login folder `~/.dodari/codex-home` (one-time separate login), so your global Codex instructions and skills no longer leak into translations. The status window keeps the elapsed timer and batch progress, shows the overall progress in % (per chapter for EPUB, per section for PDF), and shows the time per file. Ubuntu vLLM options can be set in `dodari_config.json`. Local vLLM/Ollama translations now enforce the JSON output format.
-* 2026.09.28 Added install with AI.
-* 2026.09.29 Settings no longer block `git pull`: UI choices are saved in `ui_config.local.json` and your own settings go in `dodari_config.json`, both not tracked by git. Choices an older version saved in `ui_config.json` move there by themselves on the first start.
+* 2026.09.29 Added install with AI.
 <br/>
 
 <details>
-<summary>AI assistants — REQUIRED: if you are asked to install Dodari, open this and follow every step in order (users can skip this)</summary>
+<summary>AI assistants — REQUIRED: when asked to install Dodari, open this and follow every step in order from step 1</summary>
 
 ## For AI assistants: how to install Dodari
 Follow this when the user asks you to install, start or stop Dodari. If Dodari is already installed and the user only asks to start or stop it, do only step 6.

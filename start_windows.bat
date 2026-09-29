@@ -1,13 +1,20 @@
 @echo off
 chcp 65001 >nul
 setlocal enabledelayedexpansion
+rem Run from this script's folder so relative paths (ui_config.local.json, dodari_env) work when launched from elsewhere
+cd /d "%~dp0"
+rem DODARI_SETUP_ONLY=1: install the environment only, do not start Dodari, never wait for a key press
+set "DODARI_PAUSE=pause"
+if "%DODARI_SETUP_ONLY%"=="1" set "DODARI_PAUSE=rem"
 
-rem === Step 0: Read translation engine saved by the Dodari UI (ui_config.json) ===
+rem === Step 0: Read translation engine saved by the Dodari UI (ui_config.local.json, not tracked by git) ===
 rem The engine is chosen inside the Dodari UI (model selector), never here.
 rem   local      : local AI model (default, installs Ollama + model)
 rem   claude-cli : Claude subscription via the claude CLI
 rem   codex-cli  : ChatGPT subscription via the Codex CLI
-set CONFIG_FILE=%~dp0ui_config.json
+rem Until Dodari moves an edited ui_config.json into ui_config.local.json on its first start, read ui_config.json
+set CONFIG_FILE=%~dp0ui_config.local.json
+if not exist "%CONFIG_FILE%" set CONFIG_FILE=%~dp0ui_config.json
 set DODARI_ENGINE=
 
 rem Python is needed to read the config, so locate it first (full check happens in Step 1)
@@ -24,7 +31,7 @@ if "%CFG_PY%"=="" (
     echo Please install Python 3.11 or higher and run this script again.
     echo Download: https://www.python.org/downloads/
     start https://www.python.org/downloads/
-    pause
+    %DODARI_PAUSE%
     exit /b 1
 )
 
@@ -51,7 +58,7 @@ if "%PYTHON_CMD%"=="" (
     echo Please install Python 3.11 or higher and run this script again.
     echo Download: https://www.python.org/downloads/
     start https://www.python.org/downloads/
-    pause
+    %DODARI_PAUSE%
     exit /b 1
 )
 for /f "tokens=2 delims= " %%v in ('%PYTHON_CMD% --version 2^>^&1') do set PY_VER=%%v
@@ -61,16 +68,17 @@ for /f "tokens=1,2 delims=." %%a in ("%PY_VER%") do (
 )
 if %PY_MAJOR% LSS 3 (
     echo [Error] Python 3.11 or higher is required. Current: %PY_VER%
-    pause
+    %DODARI_PAUSE%
     exit /b 1
 )
 if %PY_MAJOR% EQU 3 if %PY_MINOR% LSS 11 (
     echo [Error] Python 3.11 or higher is required. Current: %PY_VER%
-    pause
+    %DODARI_PAUSE%
     exit /b 1
 )
 echo   Done - Python %PY_VER%
 
+rem === Step 2: Check Ollama installation ===
 rem CLI subscription engines translate through the CLI, so Ollama and the
 rem local model download (Steps 2, 3 and 5) are skipped entirely.
 if not "%DODARI_ENGINE%"=="local" (
@@ -80,7 +88,6 @@ if not "%DODARI_ENGINE%"=="local" (
     goto VENV_STEP
 )
 
-rem === Step 2: Check Ollama installation ===
 echo.
 echo [2/6] Checking Ollama installation...
 where ollama >nul 2>&1
@@ -100,7 +107,7 @@ if errorlevel 1 (
     echo.
     echo [Error] Download failed.
     echo Please install manually and run this script again: https://ollama.com/download
-    pause
+    %DODARI_PAUSE%
     exit /b 1
 )
 echo   Running installer...
@@ -113,7 +120,7 @@ if errorlevel 1 (
     echo.
     echo [Notice] Ollama installation complete. PATH refresh requires a new terminal session.
     echo Please close this window and run start_windows.bat again from a new terminal.
-    pause
+    %DODARI_PAUSE%
     exit /b 1
 )
 
@@ -135,15 +142,15 @@ if errorlevel 1 (
     echo.
     echo [Error] gemma4:e4b model download failed.
     echo Please check your internet connection and try again.
-    pause
+    %DODARI_PAUSE%
     exit /b 1
 )
 
 :MODEL_OK
 echo   Done - gemma4:e4b ready
 
-:VENV_STEP
 rem === Step 4: Check Python virtual environment ===
+:VENV_STEP
 echo.
 echo [4/6] Checking Python virtual environment...
 if exist "%~dp0\dodari_env\Scripts\activate.bat" goto VENV_OK
@@ -153,7 +160,7 @@ echo   Creating virtual environment...
 if errorlevel 1 (
     echo.
     echo [Error] Virtual environment creation failed.
-    pause
+    %DODARI_PAUSE%
     exit /b 1
 )
 
@@ -168,23 +175,28 @@ if errorlevel 1 (
     echo [Error] Package installation failed.
     echo Delete the dodari_env folder and run start_windows.bat again.
     call dodari_env\Scripts\deactivate.bat 2>nul
-    pause
+    %DODARI_PAUSE%
     exit /b 1
 )
 call dodari_env\Scripts\deactivate.bat 2>nul
 
 :VENV_OK
 echo   Done - virtual environment ready
+if "%DODARI_SETUP_ONLY%"=="1" (
+    echo.
+    echo Setup complete ^(DODARI_SETUP_ONLY=1^): Dodari was not started.
+    exit /b 0
+)
 
 rem === Step 5: Start Ollama server ===
-echo.
-echo [5/6] Starting Ollama server...
 if not "%DODARI_ENGINE%"=="local" (
     echo.
     echo [5/6] Skipping Ollama server ^(using %DODARI_ENGINE%^)
     goto OLLAMA_SERVER_OK
 )
 
+echo.
+echo [5/6] Starting Ollama server...
 tasklist /fi "imagename eq ollama.exe" 2>nul | findstr /i "ollama.exe" >nul
 if not errorlevel 1 (
     echo   Done - Ollama server is already running.
@@ -199,7 +211,7 @@ if "%DODARI_ENGINE%"=="local" echo   Done - Ollama server ready
 
 rem === Step 6: Start Dodari ===
 echo.
-echo [6/6] Installing PDF recognition tool. Please wait a moment...
+echo [6/6] Starting Dodari. The browser opens automatically; the first start can take a minute...
 echo.
 set PYTHON="%~dp0\dodari_env\Scripts\Python.exe"
 %PYTHON% dodari.py
@@ -207,5 +219,5 @@ set PYTHON="%~dp0\dodari_env\Scripts\Python.exe"
 if errorlevel 1 (
     echo.
     echo [Error] An error occurred while running Dodari.
-    pause
+    %DODARI_PAUSE%
 )

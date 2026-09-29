@@ -1,21 +1,27 @@
 #!/bin/bash
 
+# Run from this script's folder so relative paths (ui_config.local.json, dodari_env) work from a desktop launcher
+cd "$(dirname "$0")" || exit 1
+
+# DODARI_SETUP_ONLY=1 installs the environment only and does not start Dodari (README.md "For AI assistants: how to install Dodari", step 4)
 # === Translation engine ===
 # The engine is chosen inside the Dodari UI (model selector) and stored in
-# ui_config.json under the "engine" key. This script only reads that value to
+# ui_config.local.json (not tracked by git) under the "engine" key. This script only reads that value to
 # decide whether the local model stack needs to be installed and started.
 #   local      : local AI model (default)
 #   claude-cli : Claude subscription via the claude CLI
 #   codex-cli  : ChatGPT subscription via the Codex CLI
-CONFIG_FILE="ui_config.json"
+# Until Dodari moves an edited ui_config.json into ui_config.local.json on its first start, ui_config.json is read instead
+CONFIG_FILE="ui_config.local.json"
+LEGACY_CONFIG_FILE="ui_config.json"
 DODARI_ENGINE=""
 
 read_engine_from_config() {
-    [ -f "$CONFIG_FILE" ] || return 1
-    python3 - "$CONFIG_FILE" <<'PYEOF' 2>/dev/null
-import json, sys
+    python3 - "$CONFIG_FILE" "$LEGACY_CONFIG_FILE" <<'PYEOF' 2>/dev/null
+import json, os, sys
 try:
-    with open(sys.argv[1], encoding='utf-8') as fp:
+    path = sys.argv[1] if os.path.exists(sys.argv[1]) else sys.argv[2]
+    with open(path, encoding='utf-8') as fp:
         data = json.load(fp)
     engine = data.get('engine', '')
     if engine in ('local', 'claude-cli', 'codex-cli'):
@@ -32,17 +38,21 @@ DODARI_ENGINE=$(read_engine_from_config)
 echo "Translation engine: $DODARI_ENGINE"
 
 # Search for Python 3.11+ (highest version first)
+# On Apple Silicon skip Intel (x86_64, Rosetta) Pythons: torch (needed by docling) has no macOS x86_64 wheels, so the install fails
+HOST_ARCH=$(uname -m)
 PYTHON_CMD=""
 for cmd in python3.14 python3.13 python3.12 python3.11; do
-    if command -v $cmd &>/dev/null; then
-        PYTHON_CMD=$cmd
-        break
-    fi
+    for candidate in $(which -a $cmd 2>/dev/null); do
+        if [ "$("$candidate" -c 'import platform; print(platform.machine())' 2>/dev/null)" = "$HOST_ARCH" ]; then
+            PYTHON_CMD=$candidate
+            break 2
+        fi
+    done
 done
 
 # If not found above, check if python3 itself is 3.11+
 if [ -z "$PYTHON_CMD" ]; then
-    if python3 -c "import sys; exit(0 if sys.version_info >= (3,11) else 1)" 2>/dev/null; then
+    if python3 -c "import sys, platform; exit(0 if sys.version_info >= (3,11) and platform.machine() == '$HOST_ARCH' else 1)" 2>/dev/null; then
         PYTHON_CMD=python3
     fi
 fi
@@ -76,16 +86,20 @@ then
 
     dodari_env/bin/pip install --upgrade pip --no-cache-dir
     dodari_env/bin/pip install -r requirements.txt --no-cache-dir
+    # Keep the package install status right away; the if block below overwrites $?
+    PIP_STATUS=$?
     # MLX is only needed for the local model engine — CLI engines skip the heavy install
     if [ "$DODARI_ENGINE" = "local" ]; then
         dodari_env/bin/pip install mlx-vlm==0.5.0 mlx==0.31.2 --no-cache-dir 2>/dev/null || true
     fi
 
-    if [ $? -ne 0 ]; then
+    if [ $PIP_STATUS -ne 0 ]; then
         echo ""
         echo "Environment setup failed."
-        echo "Delete the dodari_env folder and run start_mac.sh again."
+        echo "The dodari_env folder was removed. Fix the error above and run start_mac.sh again."
         deactivate
+        # A half-built environment would make the next run skip the install, so remove it
+        rm -rf dodari_env
         exit 1
     fi
 
@@ -95,6 +109,12 @@ then
 fi
 
 . dodari_env/bin/activate
+
+if [ "$DODARI_SETUP_ONLY" = "1" ]; then
+    echo "Setup complete (DODARI_SETUP_ONLY=1): Dodari was not started."
+    deactivate
+    exit 0
+fi
 
 # CLI subscription engines translate through the CLI subprocess,
 # so no local model download and no local API server are needed.

@@ -8,3 +8,7 @@ outputs
 **/._.DS_Store
 dodari_env
 __pycache__
+*.log
+*.local.json
+*.tmp
+dodari_config.json

@@ -135,6 +135,8 @@ cd dodari
 - Mac: run `sh start_mac.sh`
 - Ubuntu/Linux: run `sh start_ubuntu.sh`
 
+The Claude (subscription CLI) engine translates with the Haiku model (`claude-haiku-5-5`) at reasoning effort max. Pick another model or reasoning effort in the UI to translate with that instead. If your claude CLI is too old for Haiku, Dodari updates it automatically.
+
 
 <br/>
 
@@ -225,6 +227,7 @@ Control Panel → Programs → Uninstall Ollama
 * 2026.08.24 Reconnecting after a dropped browser session now restores translation progress and download list
 * 2026.09.12 Fixed the status showing "translation complete" with no output when PDF conversion failed. Added an error message that cancels the translation when the attached file path contains Korean (non-ASCII) characters. The model is now selected after Dodari starts, inside the UI.
 * 2026.09.29 Added install with AI.
+* 2026.10.09 Claude subscription translation now uses Haiku max.
 <br/>
 
 <details>
@@ -273,7 +276,7 @@ Terminal: `[Dodari 3/7] Saving settings…` → `[Dodari 3/7] Settings saved`
 
 Write `ui_config.local.json` in the install folder before running any start script (create it if it does not exist; git does not track it). If it exists, keep its other keys and set only `ui_lang`, `engine` and `cli_models`. Do not edit `ui_config.json`.
 
-- Engine: ChatGPT (`codex-cli`, `gpt-6-luna`, `max`) by default. Use Claude (`claude-cli`) if the user asked for Claude or has only a Claude subscription.
+- Engine: ChatGPT (`codex-cli`, `gpt-6-luna`, `max`) by default. Use Claude (`claude-cli`, `claude-haiku-5-5`, `max`) if the user asked for Claude or has only a Claude subscription.
 - `ui_lang`: the user's language, one of `ko`, `en`, `ja`, `zh`, `fr`, `it`, `nl`, `da`, `sv`, `no`, `ar`, `fa` (anything else: `en`).
 
 ChatGPT (`codex-cli`):
@@ -285,7 +288,7 @@ ChatGPT (`codex-cli`):
 Claude (`claude-cli`):
 
 ```json
-{"ui_lang": "en", "engine": "claude-cli", "cli_models": {"claude-cli": {"model": "claude-sonnet-5", "effort": null}}}
+{"ui_lang": "en", "engine": "claude-cli", "cli_models": {"claude-cli": {"model": "claude-haiku-5-5", "effort": "max"}}}
 ```
 
 ### 4. Install the dependencies **[network] [outside workspace]**

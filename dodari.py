@@ -1079,8 +1079,8 @@ DODARI_CONFIG_DEFAULTS = {
         'efforts': ['low', 'medium', 'high', 'xhigh', 'max'],
     },
     'claude': {
-        'model': None, 'effort': None,
-        'models': ['claude-opus-5-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-fable-5-1'],
+        'model': 'claude-haiku-5-5', 'effort': 'max',
+        'models': ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-1'],
         'efforts': list(CLAUDE_EFFORT_LEVELS),
     },
     'vllm': {
@@ -1146,16 +1146,21 @@ def _dodari_load_config(path=None):
                 print(f'[Config] {section}.{key} invalid — default used', flush=True)
                 cfg[section][key] = list(DODARI_CONFIG_DEFAULTS[section][key])
     claude = cfg['claude']
-    if claude['model'] is not None and not (isinstance(claude['model'], str) and claude['model'].strip()):
-        print(f'[Config] claude.model {claude["model"]!r} invalid — CLI default used', flush=True)
-        claude['model'] = None
-    elif isinstance(claude['model'], str):
+    default_model = DODARI_CONFIG_DEFAULTS['claude']['model']
+    default_effort = DODARI_CONFIG_DEFAULTS['claude']['effort']
+    if isinstance(claude['model'], str) and claude['model'].strip():
         claude['model'] = claude['model'].strip()
-    if claude['effort'] is not None and str(claude['effort']).strip().lower() not in CLAUDE_EFFORT_LEVELS:
-        print(f'[Config] claude.effort {claude["effort"]!r} is not one of {CLAUDE_EFFORT_LEVELS} — CLI default used', flush=True)
-        claude['effort'] = None
-    elif claude['effort'] is not None:
-        claude['effort'] = str(claude['effort']).strip().lower()
+    else:
+        if claude['model'] not in (None, ''):
+            print(f'[Config] claude.model {claude["model"]!r} invalid — {default_model} used', flush=True)
+        claude['model'] = default_model
+    effort = str(claude['effort']).strip().lower() if claude['effort'] is not None else ''
+    if effort in CLAUDE_EFFORT_LEVELS:
+        claude['effort'] = effort
+    else:
+        if effort:
+            print(f'[Config] claude.effort {claude["effort"]!r} is not one of {CLAUDE_EFFORT_LEVELS} — {default_effort} used', flush=True)
+        claude['effort'] = default_effort
     return cfg
 
 DODARI_CONFIG = _dodari_load_config()
@@ -1244,6 +1249,11 @@ CODEX_MODEL_MIN_VERSIONS = (
 CODEX_UPDATE_CMD = 'npm install -g @openai/codex@latest'
 CODEX_UNSUPPORTED_MARKER = 'is not supported when using codex with a chatgpt account'
 
+CLAUDE_MODEL_MIN_VERSIONS = (
+    ('claude-haiku-5-5', (2, 1, 293)),
+)
+CLAUDE_UPDATE_CMD = 'claude update'
+
 class DodariModelRejected(DodariCliError):
     pass
 
@@ -1267,6 +1277,24 @@ def _dodari_codex_version_gate(version_raw, model):
     if not _dodari_cli_version_at_least(found, minimum):
         return False, f'codex CLI {have} < {need} for {model}. Run: {CODEX_UPDATE_CMD}'
     return True, f'codex CLI {have} >= {need} for {model}'
+
+def _dodari_claude_min_version(model):
+    low = (model or '').strip().lower()
+    for prefix, minimum in CLAUDE_MODEL_MIN_VERSIONS:
+        if low.startswith(prefix):
+            return minimum
+    return CLI_MIN_VERSIONS[ENGINE_CLAUDE_CLI]
+
+def _dodari_claude_version_gate(found, model):
+    if found is None:
+        return False, 'Cannot read claude version'
+    minimum = _dodari_claude_min_version(model)
+    have = '.'.join(str(x) for x in found)
+    need = '.'.join(str(x) for x in minimum)
+    label = model or 'CLI default model'
+    if not _dodari_cli_version_at_least(found, minimum):
+        return False, f'claude CLI {have} < {need} for {label}. Run: {CLAUDE_UPDATE_CMD}'
+    return True, f'claude CLI {have} >= {need} for {label}'
 
 def _dodari_codex_is_model_unsupported(message):
     return CODEX_UNSUPPORTED_MARKER in str(message).lower()
@@ -1340,18 +1368,26 @@ def _dodari_engine_default_selection(engine, config=None):
     sec = (config or DODARI_CONFIG)[section]
     return sec['model'], sec['effort']
 
+CLAUDE_LEGACY_AI_INSTALL_MODEL = 'claude-sonnet-5'
+
 def _dodari_engine_saved_selection(engine, ui_data):
     saved = (ui_data or {}).get('cli_models')
     if not isinstance(saved, dict) or not isinstance(saved.get(engine), dict):
         return None
     item = saved[engine]
-    return (item.get('model') or None), (item.get('effort') or None)
+    model, effort = (item.get('model') or None), (item.get('effort') or None)
+    if engine == ENGINE_CLAUDE_CLI and model == CLAUDE_LEGACY_AI_INSTALL_MODEL and effort is None:
+        return None
+    return model, effort
 
 def _dodari_engine_selection_update(ui_data, engine, model, effort):
     data = dict(ui_data or {})
     saved = data.get('cli_models')
     saved = dict(saved) if isinstance(saved, dict) else {}
-    saved[engine] = {'model': model or None, 'effort': effort or None}
+    if ((model or None), (effort or None)) == _dodari_engine_default_selection(engine):
+        saved.pop(engine, None)
+    else:
+        saved[engine] = {'model': model or None, 'effort': effort or None}
     data['cli_models'] = saved
     return data
 
@@ -1620,6 +1656,10 @@ def _dodari_cli_preflight(engine, model=None):
         return False, f'codex CLI is not logged in for Dodari (dedicated CODEX_HOME, one-time login).\n{_dodari_codex_login_hint(platform.system())}'
     if not ok and _dodari_is_version_error(message):
         return False, _dodari_version_error_message(engine, found, _dodari_required_version(message))
+    if ok and engine == ENGINE_CLAUDE_CLI:
+        model = model or _dodari_engine_default_selection(ENGINE_CLAUDE_CLI)[0]
+        gate_ok, gate_msg = _dodari_claude_version_gate(found, model)
+        return (True, f'{message} | {gate_msg}') if gate_ok else (False, gate_msg)
     if not ok or engine != ENGINE_CODEX_CLI:
         return ok, message
     model = _dodari_codex_defaults(model)[0]
@@ -2030,6 +2070,9 @@ LANG_DISPLAY_BY_UI = {
     'ar': {'한국어':'الكورية','영어':'الإنجليزية','일본어':'اليابانية','중국어':'الصينية','프랑스어':'الفرنسية','이탈리아어':'الإيطالية','네덜란드어':'الهولندية','덴마크어':'الدانماركية','스웨덴어':'السويدية','노르웨이어':'النرويجية','아랍어':'العربية','페르시아어':'الفارسية'},
     'fa': {'한국어':'کره‌ای','영어':'انگلیسی','일본어':'ژاپنی','중국어':'چینی','프랑스어':'فرانسوی','이탈리아어':'ایتالیایی','네덜란드어':'هلندی','덴마크어':'دانمارکی','스웨덴어':'سوئدی','노르웨이어':'نروژی','아랍어':'عربی','페르시아어':'فارسی'},
 }
+
+CLI_ENGINE_CHOICE_SUFFIX = {'ko': '구독 CLI'}
+CLI_ENGINE_CHOICE_SUFFIX_DEFAULT = 'subscription CLI'
 
 UI_LANG_NAMES = {
     'ko':'한국어','en':'English','ja':'日本語','zh':'中文','fr':'Français','it':'Italiano',
@@ -3326,8 +3369,6 @@ def save_engine_config(engine: str):
     _write_ui_config({'engine': engine})
 
 
-EPUB_TRANSLATE_TAGS = {'div', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'span', 'td', 'th', 'blockquote'}
-
 EPUB_SKIP_EPUB_TYPES = {'index', 'toc', 'cover', 'lot', 'loi'}
 
 
@@ -3901,6 +3942,60 @@ def _dodari_epub_set_opf_language(opf_path, lang):
             fp.write(new_text)
     return count
 
+
+EPUB_NCX_LABEL_RE = re.compile(
+    r'(<(?:[A-Za-z_][\w.-]*:)?(?:navLabel|docTitle)\b[^>]*>\s*<(?:[A-Za-z_][\w.-]*:)?text\b[^>]*>)'
+    r'(.*?)(</(?:[A-Za-z_][\w.-]*:)?text\s*>)',
+    re.DOTALL,
+)
+EPUB_NCX_PAGELIST_RE = re.compile(
+    r'<(?:[A-Za-z_][\w.-]*:)?pageList\b.*?</(?:[A-Za-z_][\w.-]*:)?pageList\s*>', re.DOTALL,
+)
+EPUB_NCX_RESUME_PREFIX = 'ncx:'
+
+
+def _dodari_epub_ncx_files(folder):
+    found = []
+    for root, dirs, files in os.walk(folder):
+        _dodari_prune_resume_dirs(dirs)
+        for fname in files:
+            if fname.lower().endswith('.ncx'):
+                found.append(os.path.join(root, fname))
+    return sorted(found)
+
+
+def _dodari_epub_ncx_labels(xml_text):
+    import html as _html
+    skip = [(m.start(), m.end()) for m in EPUB_NCX_PAGELIST_RE.finditer(xml_text)]
+    labels = []
+    for m in EPUB_NCX_LABEL_RE.finditer(xml_text):
+        if any(s <= m.start() < e for s, e in skip):
+            continue
+        labels.append(((m.start(2), m.end(2)), _html.unescape(m.group(2))))
+    return labels
+
+
+def _dodari_epub_ncx_soup(texts):
+    import html as _html
+    body = ''.join(f'<p>{_html.escape(t, quote=False)}</p>' for t in texts)
+    return BeautifulSoup(f'<html><body>{body}</body></html>', 'html.parser')
+
+
+def _dodari_epub_ncx_write(xml_text, labels, soup):
+    import html as _html
+    paras = soup.find('body').find_all('p', recursive=False)
+    if len(paras) != len(labels):
+        raise ValueError(f'NCX label count mismatch ({len(paras)} != {len(labels)})')
+    out = []
+    pos = 0
+    for ((start, end), _src), para in zip(labels, paras):
+        out.append(xml_text[pos:start])
+        out.append(_html.escape(para.get_text(), quote=False))
+        pos = end
+    out.append(xml_text[pos:])
+    return ''.join(out)
+
+
 def _dodari_epub_text_weight(html_text):
     import html as _html
     if not html_text:
@@ -4329,6 +4424,15 @@ class Dodari:
             return T('engine_cli')
         return T('engine_ollama') if platform.system() == 'Windows' else T('engine_gemma')
 
+    def _cli_engine_choices(self, lang_code=None):
+        if self.platform == 'Linux':
+            return []
+        suffix = CLI_ENGINE_CHOICE_SUFFIX.get(lang_code or self.ui_lang, CLI_ENGINE_CHOICE_SUFFIX_DEFAULT)
+        return [
+            (f'Claude ({suffix})', ENGINE_CLAUDE_CLI),
+            (f'ChatGPT ({suffix})', ENGINE_CODEX_CLI),
+        ]
+
     def _genre_choices(self):
         return [(self._T(f'genre_{i}'), GENRE_CHOICES_KO[i]) for i in range(len(GENRE_CHOICES_KO))]
 
@@ -4411,11 +4515,8 @@ class Dodari:
                             ]
                             _model_default = "mlx-community/gemma-4-31b-it-4bit"
 
-                        if self.platform != 'Linux':
-                            _model_choices = _model_choices + [
-                                ('Claude (subscription CLI)', ENGINE_CLAUDE_CLI),
-                                ('ChatGPT (subscription CLI)', ENGINE_CODEX_CLI),
-                            ]
+                        _local_model_choices = list(_model_choices)
+                        _model_choices = _local_model_choices + self._cli_engine_choices(self.ui_lang)
                         if _dodari_cli_is_engine(self.gemma_model):
                             _model_default = self.gemma_model
 
@@ -4698,18 +4799,24 @@ class Dodari:
                                 outputs=[status_msg, done_files, elapsed_timer]
                             )
 
-            def on_ui_lang_change(lang_code):
-                save_ui_config(lang_code)
+            def _ui_lang_updates(lang_code, sync_values=False):
                 self.ui_lang = lang_code
                 T = lambda k: UI_TEXT.get(lang_code, UI_TEXT['en']).get(k, UI_TEXT['en'].get(k, k))
                 _eng = self._engine_label(lang_code)
                 _cli_state = self._cli_dropdown_state(self.gemma_model)
+                _cli_vis = {'visible': _cli_state is not None} if sync_values else {}
                 if _cli_state:
-                    _cli_model_upd = gr.update(label=T('cli_model_label'), choices=_cli_state['model_choices'], value=_cli_state['model_value'])
-                    _cli_effort_upd = gr.update(label=T('cli_effort_label'), choices=_cli_state['effort_choices'], value=_cli_state['effort_value'])
+                    _cli_model_upd = gr.update(label=T('cli_model_label'), choices=_cli_state['model_choices'], value=_cli_state['model_value'], **_cli_vis)
+                    _cli_effort_upd = gr.update(label=T('cli_effort_label'), choices=_cli_state['effort_choices'], value=_cli_state['effort_value'], **_cli_vis)
                 else:
-                    _cli_model_upd = gr.update(label=T('cli_model_label'))
-                    _cli_effort_upd = gr.update(label=T('cli_effort_label'))
+                    _cli_model_upd = gr.update(label=T('cli_model_label'), **_cli_vis)
+                    _cli_effort_upd = gr.update(label=T('cli_effort_label'), **_cli_vis)
+                _radio_choices = _local_model_choices + self._cli_engine_choices(lang_code)
+                _model_values = [c[1] if isinstance(c, tuple) else c for c in _radio_choices]
+                if sync_values and self.gemma_model in _model_values:
+                    _model_radio_upd = gr.update(label=T('model_label'), choices=_radio_choices, value=self.gemma_model)
+                else:
+                    _model_radio_upd = gr.update(label=T('model_label'), choices=_radio_choices)
                 return (
                     gr.update(value=_title_html(lang_code)),
                     gr.update(label=T('step1')),
@@ -4719,7 +4826,7 @@ class Dodari:
                     gr.update(label=T('step2')),
                     gr.update(label=T('target_lang_label'), choices=self._lang_choices()),
                     gr.update(value=f"<p style='color:green;'>{_eng}</p>"),
-                    gr.update(label=T('model_label')),
+                    _model_radio_upd,
                     _cli_model_upd,
                     _cli_effort_upd,
                     gr.update(value=f"<p style='color:#888;font-size:0.85em;'>{T('cli_notice')}</p>"),
@@ -4739,6 +4846,13 @@ class Dodari:
                     gr.update(label=T('status_tab')),
                     gr.update(label=T('download_label')),
                 )
+
+            def on_ui_lang_change(lang_code):
+                save_ui_config(lang_code)
+                return _ui_lang_updates(lang_code)
+
+            def on_page_load_settings():
+                return (*_ui_lang_updates(self.ui_lang, sync_values=True), gr.update(value=self.ui_lang))
 
             _live_outputs = [
                 title_html, tab1, step1_html, input_window,
@@ -4764,6 +4878,7 @@ class Dodari:
                     min_width=160,
                 )
             ui_lang_dropdown.change(fn=on_ui_lang_change, inputs=[ui_lang_dropdown], outputs=_live_outputs)
+            self.app.load(fn=on_page_load_settings, outputs=_live_outputs + [ui_lang_dropdown])
 
         self.app.queue().launch(
             share=False,
@@ -5319,6 +5434,11 @@ class Dodari:
                     _dodari_job_unit_done(chapter_idx)
 
                 if chapter_failed:
+                    self._record_file_time(file_times, f'{name}{ext}', file_start_time, False)
+                    continue
+
+                if not self._translate_epub_ncx(file, genre_val, tone_val, bilingual_order_val,
+                                                resume_settings, resume_done, pipeline_failures):
                     self._record_file_time(file_times, f'{name}{ext}', file_start_time, False)
                     continue
 
@@ -6218,7 +6338,7 @@ class Dodari:
         if not choices:
             return None
         model, effort = self._cli_selection(engine)
-        default = [] if engine == ENGINE_CODEX_CLI else [(self._T('cli_default_option'), '')]
+        default = [] if engine in (ENGINE_CODEX_CLI, ENGINE_CLAUDE_CLI) else [(self._T('cli_default_option'), '')]
         models = list(choices['models'])
         if model and model not in models:
             models.insert(0, model)
@@ -6241,13 +6361,14 @@ class Dodari:
         engine = self.gemma_model
         if not _dodari_cli_is_engine(engine):
             return gr.update()
-        _, effort = self._cli_selection(engine)
+        prev_model, effort = self._cli_selection(engine)
         valid = self._cli_valid_efforts(engine, model or None)
         if effort and effort not in valid:
             default_effort = _dodari_engine_default_selection(engine)[1]
             effort = default_effort if default_effort in valid else None
         self._set_cli_selection(engine, model or None, effort)
-        self.cli_preflight_done = False
+        if self._cli_selection(engine)[0] != prev_model:
+            self.cli_preflight_done = False
         state = self._cli_dropdown_state(engine)
         return gr.update(choices=state['effort_choices'], value=state['effort_value'])
 
@@ -6285,7 +6406,9 @@ class Dodari:
             self.codex_effort = effort or DODARI_CONFIG['codex']['effort']
             model, effort = self.codex_model, self.codex_effort
         elif engine == ENGINE_CLAUDE_CLI:
-            self.claude_model, self.claude_effort = model, effort
+            self.claude_model = model or DODARI_CONFIG['claude']['model']
+            self.claude_effort = effort or DODARI_CONFIG['claude']['effort']
+            model, effort = self.claude_model, self.claude_effort
         else:
             return
         _dodari_engine_select(engine, model, effort)
@@ -6910,6 +7033,75 @@ class Dodari:
                 if file.lower().endswith('opf'):
                     opf_path = os.path.join(root, file)
                     return opf_path
+
+    def _translate_epub_ncx(self, file, genre_val, tone_val, bilingual_order_val, resume_settings, resume_done, pipeline_failures):
+        for ncx_1 in _dodari_epub_ncx_files(self.temp_folder_1):
+            rel = _dodari_resume_unit_key(self.temp_folder_1, ncx_1)
+            done_key = _dodari_resume_chunk_key(EPUB_NCX_RESUME_PREFIX + rel)
+            if _dodari_resume_is_done(resume_done, done_key):
+                print(f'[Resume] Skipping already translated NCX: {rel}')
+                continue
+            ncx_2 = os.path.join(self.temp_folder_2, rel)
+            try:
+                with open(ncx_1, 'r', encoding='utf-8') as fp:
+                    xml_1 = fp.read()
+                with open(ncx_2, 'r', encoding='utf-8') as fp:
+                    xml_2 = fp.read()
+                labels_1 = _dodari_epub_ncx_labels(xml_1)
+                labels_2 = _dodari_epub_ncx_labels(xml_2)
+                if [t for _span, t in labels_1] != [t for _span, t in labels_2]:
+                    raise ValueError('NCX labels differ between the two copies')
+                soup_1 = _dodari_epub_ncx_soup([t for _span, t in labels_1])
+                soup_2 = _dodari_epub_ncx_soup([t for _span, t in labels_2])
+                units_1 = _dodari_epub_collect_units(soup_1)
+                units_2 = _dodari_epub_collect_units(soup_2)
+                if len(units_1) != len(units_2):
+                    raise ValueError(f'NCX unit count mismatch ({len(units_1)} != {len(units_2)})')
+            except Exception as err:
+                print(err)
+                print(f'[EPUB] NCX parsing error, keeping source table of contents: {rel}')
+                continue
+            print(f'[EPUB] NCX table of contents: {rel} ({len(labels_1)} labels, {len(units_1)} to translate)')
+            if units_1:
+                only_texts = []
+                whole_particle = []
+                for unit in units_1:
+                    particle = [r['src'] for r in unit['sentences'] if r['translate']]
+                    only_texts.extend(particle)
+                    whole_particle.extend(particle)
+                    whole_particle.append(0)
+                try:
+                    _parti_1, parti_2 = self.resumable_translate(
+                        only_texts, whole_particle, 'epub', genre_val, tone_val, bilingual_order_val,
+                        self.temp_folder_1, file['orig_name'], resume_settings, resume_done,
+                        None, key_prefix=f'{EPUB_NCX_RESUME_PREFIX}{rel}:'
+                    )
+                except Exception as err:
+                    print(f'[Translation] Failed on NCX: {rel}')
+                    print(f'[Translation] Reason: {err}')
+                    print('[Translation] Aborting this file. Progress is preserved, rerun to resume.')
+                    pipeline_failures.append(_dodari_pipeline_failure_entry(file['orig_name'], err))
+                    return False
+                try:
+                    translations = _dodari_epub_group_translations(parti_2)
+                    if len(translations) != len(units_1):
+                        raise ValueError(f'NCX translation groups mismatch ({len(translations)} != {len(units_1)})')
+                    _dodari_epub_apply_units(soup_1, units_1, translations, True, bilingual_order_val)
+                    _dodari_epub_apply_units(soup_2, units_2, translations, False, bilingual_order_val)
+                    new_1 = _dodari_epub_ncx_write(xml_1, labels_1, soup_1)
+                    new_2 = _dodari_epub_ncx_write(xml_2, labels_2, soup_2)
+                    for path, text in ((ncx_1, new_1), (ncx_2, new_2)):
+                        with open(path, 'w', encoding='utf-8') as fp:
+                            fp.write(text)
+                            fp.flush()
+                            os.fsync(fp.fileno())
+                except Exception as err:
+                    print(err)
+                    print(f'[EPUB] NCX reassembly error, keeping source table of contents: {rel}')
+                    continue
+            _dodari_resume_mark_done(self.temp_folder_1, file['orig_name'], resume_settings, resume_done, done_key)
+            _dodari_resume_save_snapshot(self.temp_folder_2, file['orig_name'], resume_settings, resume_done)
+        return True
 
     def calculate_elapsed_time(self, start_time, what):
         end = time.time()

@@ -136,6 +136,8 @@ cd dodari
 - 맥은 `sh start_mac.sh` 실행
 - 우분투(Linux)는 `sh start_ubuntu.sh` 실행
 
+클로드(구독 CLI) 엔진은 Haiku 모델(`claude-haiku-5-5`)과 추론 강도 max로 번역합니다. 화면의 모델·추론 강도에서 다른 값을 고르면 그 값으로 번역합니다. claude CLI가 Haiku를 지원하지 않는 옛 버전이면 도다리가 자동으로 업데이트합니다.
+
 
 <br/>
 
@@ -225,10 +227,11 @@ ollama rm gemma4:31b
 * 2026.08.24 브라우저 연결이 끊겨도 재접속하면 번역 진행 상태와 다운로드 목록이 자동 복원되도록 개선
 * 2026.09.12 PDF 변환 실패 시 결과물 없이 번역완료로 표시되던 문제 수정. 첨부파일 경로에 한글이 포함되어 있을경우 에러메시지 띄우고 취소하기 추가. 도다리 시작후 모델선택하도록 변경.
 * 2026.09.29 AI로 설치하기 추가.
+* 2026.10.09 클로드 구독 번역은 Haiku max로 번역
 <br/>
 
 ## 개발 뒷이야기
-1. 저와 gemini와 claude가 함께 만들었습니다. 솔직히 저의 기여도는 클로드 다음입니다.
+1. 저와 claude가 함께 만들었습니다. 솔직히 저의 기여도는 클로드 다음입니다.
 2. pdf는 언제봐도 아주 나쁜 파일 형식입니다.
 3. 개발기간 일주일보다 이 README.md를 만드는데 더 오랜 시간이 걸렸습니다.
 4. AI 도움없이 처음부터 끝까지 제가 만든건 이 파일 하나뿐입니다.
@@ -282,7 +285,7 @@ ollama rm gemma4:31b
 
 시작 스크립트를 실행하기 전에 설치 폴더의 `ui_config.local.json`을 씁니다(없으면 새로 만듭니다. git이 추적하지 않는 파일). 이미 있으면 다른 키는 그대로 두고 `ui_lang`, `engine`, `cli_models`만 씁니다. `ui_config.json`은 고치지 않습니다.
 
-- 엔진: 기본은 ChatGPT(`codex-cli`, `gpt-6-luna`, `max`). 사용자가 Claude로 설치해 달라고 했거나 Claude 구독만 있다고 하면 Claude(`claude-cli`).
+- 엔진: 기본은 ChatGPT(`codex-cli`, `gpt-6-luna`, `max`). 사용자가 Claude로 설치해 달라고 했거나 Claude 구독만 있다고 하면 Claude(`claude-cli`, `claude-haiku-5-5`, `max`).
 - `ui_lang`: 사용자의 언어. `ko`, `en`, `ja`, `zh`, `fr`, `it`, `nl`, `da`, `sv`, `no`, `ar`, `fa` 중 하나(그 밖의 언어는 `en`).
 
 ChatGPT(`codex-cli`):
@@ -294,7 +297,7 @@ ChatGPT(`codex-cli`):
 Claude(`claude-cli`):
 
 ```json
-{"ui_lang": "ko", "engine": "claude-cli", "cli_models": {"claude-cli": {"model": "claude-sonnet-5", "effort": null}}}
+{"ui_lang": "ko", "engine": "claude-cli", "cli_models": {"claude-cli": {"model": "claude-haiku-5-5", "effort": "max"}}}
 ```
 
 ### 4. 의존성 설치 **[network] [outside workspace]**

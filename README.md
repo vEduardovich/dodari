@@ -228,6 +228,7 @@ Control Panel → Programs → Uninstall Ollama
 * 2026.09.12 Fixed the status showing "translation complete" with no output when PDF conversion failed. Added an error message that cancels the translation when the attached file path contains Korean (non-ASCII) characters. The model is now selected after Dodari starts, inside the UI.
 * 2026.09.29 Added install with AI.
 * 2026.10.09 Claude subscription translation now uses Haiku max.
+* 2026.10.12 Translation quality improvement patch (fixed untranslated text in special cases, better formatting preservation, etc.)
 <br/>
 
 <details>

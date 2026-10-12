@@ -3,6 +3,7 @@ import sys
 
 if os.name == 'nt':
     os.environ.setdefault('HF_HUB_DISABLE_SYMLINKS_WARNING', '1')
+os.environ.setdefault('GRADIO_ANALYTICS_ENABLED', 'False')
 import base64
 from typing import List, Union, Sequence
 from datetime import timedelta
@@ -44,22 +45,131 @@ import gc
 import atexit
 import webbrowser
 
-def cleanup_llm_server():
+LLM_SERVER_PORT = 8000
+
+LLM_SERVER_CMD_MARKERS = ('mlx_vlm.server', 'vllm.entrypoints.openai.api_server', 'vllm serve')
+
+LLM_SERVER_STOP_TIMEOUT_SEC = 15
+
+_DODARI_LLM_PROCS = []
+
+def _dodari_is_llm_server_cmd(command):
+    text = str(command or '')
+    return any(marker in text for marker in LLM_SERVER_CMD_MARKERS)
+
+def _dodari_url_port(url, default=LLM_SERVER_PORT):
+    m = re.match(r'^[a-z]+://[^/:]+:(\d+)', str(url or ''))
+    return int(m.group(1)) if m else default
+
+def _dodari_port_listener_pids(port):
+    try:
+        proc = subprocess.run(['lsof', '-nP', f'-iTCP:{int(port)}', '-sTCP:LISTEN', '-t'],
+                              capture_output=True, text=True, timeout=10)
+        return sorted({int(x) for x in proc.stdout.split() if x.strip().isdigit()})
+    except FileNotFoundError:
+        pass
+    except Exception as err:
+        print(f'[SHUTDOWN] lsof failed: {err}')
+        return []
+    try:
+        proc = subprocess.run(['ss', '-ltnpH', f'sport = :{int(port)}'], capture_output=True, text=True, timeout=10)
+        return sorted({int(x) for x in re.findall(r'pid=(\d+)', proc.stdout)})
+    except Exception as err:
+        print(f'[SHUTDOWN] ss failed: {err}')
+        return []
+
+def _dodari_process_command(pid):
+    try:
+        proc = subprocess.run(['ps', '-o', 'command=', '-p', str(int(pid))], capture_output=True, text=True, timeout=10)
+        return proc.stdout.strip()
+    except Exception:
+        return ''
+
+def _dodari_pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except Exception:
+        return True
+
+def _dodari_terminate_pids(pids, timeout=LLM_SERVER_STOP_TIMEOUT_SEC):
+    import signal as _signal
+    pids = [int(p) for p in pids if int(p) != os.getpid()]
+    for pid in pids:
+        try:
+            os.kill(pid, _signal.SIGTERM)
+        except Exception:
+            pass
+    deadline = time.time() + timeout
+    while time.time() < deadline and any(_dodari_pid_alive(p) for p in pids):
+        time.sleep(0.5)
+    for pid in pids:
+        if _dodari_pid_alive(pid):
+            try:
+                os.kill(pid, getattr(_signal, 'SIGKILL', _signal.SIGTERM))
+            except Exception:
+                pass
+
+def _dodari_shutdown_own_llm_servers(timeout=LLM_SERVER_STOP_TIMEOUT_SEC):
+    import signal as _signal
+    stopped = 0
+    while _DODARI_LLM_PROCS:
+        proc = _DODARI_LLM_PROCS.pop()
+        if proc.poll() is not None:
+            continue
+        try:
+            if hasattr(os, 'killpg'):
+                os.killpg(proc.pid, _signal.SIGTERM)
+            else:
+                proc.terminate()
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                if hasattr(os, 'killpg'):
+                    os.killpg(proc.pid, _signal.SIGKILL)
+                else:
+                    proc.kill()
+            except Exception:
+                pass
+        except Exception as err:
+            print(f'[SHUTDOWN] Could not stop LLM server (pid {proc.pid}): {err}')
+        stopped += 1
+    return stopped
+
+def _dodari_shutdown_port_llm_servers(port=LLM_SERVER_PORT, timeout=LLM_SERVER_STOP_TIMEOUT_SEC):
+    targets = []
+    for pid in _dodari_port_listener_pids(port):
+        command = _dodari_process_command(pid)
+        if _dodari_is_llm_server_cmd(command):
+            targets.append(pid)
+        else:
+            print(f'[SHUTDOWN] Port {port} is held by a non-LLM process (pid {pid}), leaving it running: {command[:120]}')
+    if targets:
+        print(f'[SHUTDOWN] Stopping LLM server on port {port}: pid {targets}')
+        _dodari_terminate_pids(targets, timeout)
+    return targets
+
+def cleanup_llm_server(port=LLM_SERVER_PORT, include_port_servers=True):
     print("\n[SHUTDOWN] Shutting down LLM API server...")
-    os.system("pkill -f 'mlx_vlm.server'")
-    os.system("pkill -f 'vllm.entrypoints.openai.api_server'")
+    _dodari_shutdown_own_llm_servers()
+    if include_port_servers and os.name != 'nt':
+        _dodari_shutdown_port_llm_servers(port)
     for _ in range(10):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(('localhost', 8000)) != 0:
+            if s.connect_ex(('localhost', port)) != 0:
                 break
         time.sleep(0.5)
-    print("[SHUTDOWN] Port 8000 released")
+    print(f"[SHUTDOWN] Port {port} released")
 
 _dodari_llm_server_started = False
 
-def _dodari_mark_llm_started():
+def _dodari_mark_llm_started(proc=None):
     global _dodari_llm_server_started
     _dodari_llm_server_started = True
+    if proc is not None:
+        _DODARI_LLM_PROCS.append(proc)
 
 MODEL_DOWNLOAD_SIZES = {
     'mlx-community/gemma-4-e4b-it-8bit': '약 9GB',
@@ -157,6 +267,20 @@ def _dodari_vllm_settings(config=None):
         'max_model_len': str(vllm['max_model_len']),
     }
 
+LOCAL_BATCH_MIN_TOKENS = 1024
+
+LOCAL_BATCH_MAX_TOKENS = 8192
+
+LOCAL_BATCH_ITEM_OVERHEAD = 16
+
+def _dodari_local_batch_max_tokens(texts, prompt='', context_limit=None):
+    budget = sum(max(48, len(str(t))) + LOCAL_BATCH_ITEM_OVERHEAD for t in texts)
+    budget = max(LOCAL_BATCH_MIN_TOKENS, min(budget, LOCAL_BATCH_MAX_TOKENS))
+    if context_limit:
+        prompt_est = len(str(prompt).encode('utf-8')) // 3 + 64
+        budget = max(256, min(budget, int(context_limit) - prompt_est))
+    return budget
+
 def _dodari_mlx_server_cmd(python_exe, model, kv_bits):
     return (
         f"{python_exe} -m mlx_vlm.server "
@@ -167,7 +291,7 @@ def _dodari_mlx_server_cmd(python_exe, model, kv_bits):
 
 def _dodari_cleanup_at_exit():
     if _dodari_llm_server_started:
-        cleanup_llm_server()
+        cleanup_llm_server(include_port_servers=False)
 
 atexit.register(_dodari_cleanup_at_exit)
 
@@ -190,7 +314,19 @@ logging.getLogger().disabled = True
 logging.raiseExceptions = False
 warnings.filterwarnings('ignore')
 
-nltk.download('punkt_tab')
+def _dodari_ensure_nltk_data(resource='punkt_tab', data_path='tokenizers/punkt_tab'):
+    try:
+        nltk.data.find(data_path)
+        return True
+    except LookupError:
+        pass
+    try:
+        return bool(nltk.download(resource))
+    except Exception as err:
+        print(f'[NLTK] {resource} download failed: {err}')
+        return False
+
+_dodari_ensure_nltk_data()
 PathType = Union[str, os.PathLike]
 
 RESUME_SNAPSHOT_NAME = 'progress.json'
@@ -198,7 +334,11 @@ RESUME_CHUNK_DIR = 'chunks'
 EPUB_META_RESUME_ID = 'meta:opf'
 RESUME_STEM_LEN = 10
 RESUME_HASH_LEN = 6
-RESUME_SETTING_KEYS = ('model', 'target_lang', 'genre', 'tone', 'bilingual_order')
+RESUME_SETTING_KEYS = ('model', 'target_lang', 'genre', 'tone', 'bilingual_order',
+                       'source_lang', 'source_hash', 'glossary_hash', 'pipeline')
+
+RESUME_PIPELINE_VERSION = 'r2'
+RESUME_FOLDER_RETENTION_DAYS = 30
 
 def _dodari_resume_settings_signature(settings):
     parts = []
@@ -219,6 +359,25 @@ def _dodari_resume_temp_basename(source_name, settings):
     raw = '{n}||{s}'.format(n=str(source_name), s=_dodari_resume_settings_signature(settings))
     digest = _hashlib.sha256(raw.encode('utf-8')).hexdigest()[:RESUME_HASH_LEN]
     return 'temp_{stem}_{h}'.format(stem=safe, h=digest)
+
+def _dodari_resume_file_hash(path, length=16):
+    import hashlib as _hashlib
+    digest = _hashlib.sha256()
+    try:
+        with open(path, 'rb') as fp:
+            for block in iter(lambda: fp.read(1024 * 1024), b''):
+                digest.update(block)
+    except OSError as err:
+        print(f'[Resume] Could not hash source file ({err}) — resume signature uses the file name only')
+        return ''
+    return digest.hexdigest()[:length]
+
+def _dodari_resume_glossary_hash(glossary, length=12):
+    import hashlib as _hashlib
+    if not glossary:
+        return ''
+    raw = json.dumps(sorted((str(k), str(v)) for k, v in dict(glossary).items()), ensure_ascii=False)
+    return _hashlib.sha256(raw.encode('utf-8')).hexdigest()[:length]
 
 def _dodari_resume_temp_folder(basename, suffix):
     return '{b}_{s}'.format(b=basename, s=suffix)
@@ -348,6 +507,24 @@ def _dodari_pdf_has_text_layer(doc, sample_size=8, min_chars=40):
             pass
     return hits * 2 >= len(indexes)
 
+def _dodari_pdf_scan_pages(doc, min_chars=40):
+    pages = set()
+    for idx in range(len(doc)):
+        try:
+            page = doc[idx]
+            if len(page.get_text().strip()) >= min_chars:
+                continue
+            if page.get_images(full=True):
+                pages.add(idx)
+        except Exception:
+            pages.add(idx)
+    return pages
+
+def _dodari_pdf_section_needs_ocr(scan_pages, start, end):
+    if scan_pages is None:
+        return True
+    return any(start <= idx <= end for idx in scan_pages)
+
 FORMULA_NOT_DECODED_RE = re.compile(r'formula\s+not\s+decoded', re.IGNORECASE)
 
 PDF_UNIT_FORMAT = 'pdf-units-v2'
@@ -423,11 +600,11 @@ def _dodari_pdf_replace_code_blocks(soup, code_block_images):
         img_idx += 1
 
 
-def _dodari_pdf_block_units(text):
+def _dodari_pdf_block_units(text, lang=None):
     atoms = []
     tokenized = _dodari_math_tokenize(text, atoms)
     records = []
-    for sent in nltk.sent_tokenize(tokenized):
+    for sent in _dodari_text_sentences(tokenized, lang):
         records.append({'src': sent, 'translate': _dodari_epub_translatable(sent)})
     return {'atoms': atoms, 'sentences': records}
 
@@ -542,6 +719,50 @@ def _dodari_resume_cleanup(folder):
 
 def _dodari_resume_is_resume_folder(name):
     return bool(re.match(r'^temp_.+_[0-9a-f]{%d}_\d+$' % RESUME_HASH_LEN, str(name)))
+
+def _dodari_resume_last_modified(folder):
+    latest = None
+    for root, _dirs, files in os.walk(folder):
+        for name in files:
+            try:
+                mtime = os.lstat(os.path.join(root, name)).st_mtime
+            except OSError:
+                continue
+            if latest is None or mtime > latest:
+                latest = mtime
+    if latest is None:
+        latest = os.lstat(folder).st_mtime
+    return latest
+
+def _dodari_resume_prune_expired(base_dir='.', retention_days=RESUME_FOLDER_RETENTION_DAYS, now=None):
+    now = time.time() if now is None else now
+    cutoff = now - retention_days * 86400
+    removed = []
+    try:
+        names = sorted(os.listdir(base_dir))
+    except OSError as err:
+        print(f'[Resume] Could not check old resume folders ({err})')
+        return removed
+    for name in names:
+        path = os.path.join(base_dir, name)
+        if not _dodari_resume_is_resume_folder(name) or os.path.islink(path) or not os.path.isdir(path):
+            continue
+        try:
+            last = _dodari_resume_last_modified(path)
+        except OSError as err:
+            print(f'[Resume] Could not read resume folder time {path} ({err})')
+            continue
+        if last >= cutoff:
+            continue
+        stamp = time.strftime('%Y-%m-%d %H:%M', time.localtime(last))
+        try:
+            shutil.rmtree(path)
+        except OSError as err:
+            print(f'[Resume] Could not remove old resume folder {path} ({err})')
+            continue
+        removed.append(path)
+        print(f'[Resume] Removed resume folder unused for over {retention_days} days (last modified {stamp}): {path}')
+    return removed
 
 def _dodari_prune_resume_dirs(dirs):
     for name in (RESUME_CHUNK_DIR, RESUME_STRUCT_DIR):
@@ -711,7 +932,6 @@ CLI_RATE_LIMIT_PATTERNS = (
     'quota exceeded',
     'limit will reset',
     'too many requests',
-    '429',
 )
 
 class DodariCliError(Exception):
@@ -719,6 +939,25 @@ class DodariCliError(Exception):
 
 class DodariCliRateLimitError(DodariCliError):
     pass
+
+class DodariCliTemporaryLimitError(DodariCliRateLimitError):
+    pass
+
+class DodariCliStopped(DodariCliError):
+    pass
+
+_DODARI_STOP_EVENT = threading.Event()
+
+def _dodari_request_stop():
+    _DODARI_STOP_EVENT.set()
+
+def _dodari_stop_check():
+    if _DODARI_STOP_EVENT.is_set():
+        raise DodariCliStopped('STOP REQUESTED — no new CLI calls after a stop signal')
+
+def _dodari_stop_wait(seconds):
+    if _DODARI_STOP_EVENT.wait(seconds):
+        _dodari_stop_check()
 
 def _dodari_cli_is_engine(model):
     return model in CLI_ENGINE_IDS
@@ -737,11 +976,54 @@ def _dodari_cli_parse_version(raw):
 def _dodari_cli_version_at_least(found, minimum):
     return tuple(found) >= tuple(minimum)
 
+CLI_HTTP_429_RE = re.compile(
+    r'(?:\b(?:status|http|code|error)(?:[ _-]?code)?\W{0,3}429\b|\bhttp/\d(?:\.\d)?\s+429\b|\b429\s+too many requests)',
+    re.IGNORECASE,
+)
+
 def _dodari_cli_is_rate_limit(message):
     if not message:
         return False
     low = str(message).lower()
-    return any(p in low for p in CLI_RATE_LIMIT_PATTERNS)
+    return any(p in low for p in CLI_RATE_LIMIT_PATTERNS) or bool(CLI_HTTP_429_RE.search(low))
+
+CODEX_AUTH_PATTERNS = (
+    '401 unauthorized', 'status 401', 'unauthorized',
+    'refresh token', 'refresh_token', 'access token could not be refreshed',
+    'not logged in', 'log out and sign in', 'sign in again', 'log in again', 'login required',
+    'token_expired', 'token is expired', 'invalid_grant', 'token has been invalidated',
+)
+
+CODEX_TEMP_429_PATTERNS = ('exceeded retry limit, last status: 429', '429 too many requests')
+
+CODEX_USAGE_LIMIT_WORDS = ('usage limit', 'usage_limit', 'quota', 'limit will reset', 'try again at', 'try again in',
+                           'purchase more credits', 'upgrade to', 'limit_reached', 'limit reached')
+
+CODEX_TRANSIENT_RETRIES = 2
+
+CODEX_TRANSIENT_WAIT_SEC = 30
+
+def _dodari_codex_failure_kind(text):
+    low = str(text or '').lower()
+    if not low:
+        return None
+    if any(p in low for p in CODEX_AUTH_PATTERNS):
+        return 'auth'
+    if any(p in low for p in CODEX_TEMP_429_PATTERNS) and not any(w in low for w in CODEX_USAGE_LIMIT_WORDS):
+        return 'temporary_429'
+    if _dodari_cli_is_rate_limit(low):
+        return 'rate_limit'
+    return None
+
+def _dodari_codex_failure_error(message, detail):
+    kind = _dodari_codex_failure_kind(detail)
+    if kind == 'auth':
+        return DodariCliAuthError(message)
+    if kind == 'temporary_429':
+        return DodariCliTransientError(message)
+    if kind == 'rate_limit':
+        return DodariCliRateLimitError(message)
+    return None
 
 def _dodari_cli_check_stdin_size(payload):
     size = len(payload.encode('utf-8'))
@@ -808,7 +1090,7 @@ def _dodari_cli_claude_payload(raw):
         detail = data.get('result') or data.get('error') or ''
         status = data.get('api_error_status')
         message = f'claude CLI error (status={status}): {detail}'
-        if _dodari_cli_is_rate_limit(f'{status} {detail}'):
+        if _dodari_cli_is_rate_limit(f'status={status} {detail}'):
             raise DodariCliRateLimitError(message)
         raise DodariCliError(message)
     return data
@@ -843,17 +1125,22 @@ def _dodari_cli_iter_events(raw):
 
 def _dodari_cli_last_agent_message(raw, check_failure=False):
     last_message = None
+    errors = []
     for event in _dodari_cli_iter_events(raw):
         if check_failure and event.get('type') == 'turn.failed':
             detail = (event.get('error') or {}).get('message', '')
             message = f'codex CLI turn failed: {detail}'
-            if _dodari_cli_is_rate_limit(detail):
-                raise DodariCliRateLimitError(message)
-            raise DodariCliError(message)
+            raise _dodari_codex_failure_error(message, detail) or DodariCliError(message)
+        if event.get('type') == 'error' and event.get('message'):
+            errors.append(str(event['message']))
         item = event.get('item') or {}
         if item.get('type') == 'agent_message' and item.get('text'):
             last_message = item['text']
     if last_message is None:
+        if check_failure and errors:
+            detail = ' / '.join(errors[-3:])
+            message = f'codex CLI: no agent_message in event stream; errors: {detail}'
+            raise _dodari_codex_failure_error(message, detail) or DodariCliError(message)
         raise DodariCliError('codex CLI: no agent_message in event stream')
     return last_message
 
@@ -968,7 +1255,8 @@ def _dodari_cli_build_codex_cmd(schema_path, instructions_path, model=None, effo
 def _dodari_cli_combined_output(proc):
     return (getattr(proc, 'stdout', '') or '') + (getattr(proc, 'stderr', '') or '')
 
-def _dodari_cli_run_subprocess(cmd, stdin_payload, label, timeout=None, workdir_flag=None, env=None):
+def _dodari_cli_run_subprocess(cmd, stdin_payload, label, timeout=None, workdir_flag=None, env=None, classify=None):
+    _dodari_stop_check()
     timeout = timeout or CLI_TIMEOUT_SEC
     workdir = tempfile.mkdtemp(prefix='dodari_cli_')
     if workdir_flag:
@@ -995,6 +1283,10 @@ def _dodari_cli_run_subprocess(cmd, stdin_payload, label, timeout=None, workdir_
     stdout = getattr(proc, 'stdout', '') or ''
     stderr = getattr(proc, 'stderr', '') or ''
     if not stdout.strip() and stderr.strip():
+        if classify:
+            classified = classify(f'{label}: {stderr.strip()[:500]}', stderr)
+            if classified is not None:
+                raise classified
         if _dodari_cli_is_rate_limit(stderr):
             raise DodariCliRateLimitError(f'{label}: {stderr.strip()[:300]}')
         raise DodariCliError(f'{label}: no output. stderr={stderr.strip()[:300]}')
@@ -1032,14 +1324,28 @@ def _dodari_cli_run_codex(texts, system_prompt, model=None, effort=None, timeout
             fp.write(system_prompt)
 
         cmd = _dodari_cli_build_codex_cmd(schema_path, instructions_path, model, effort)
-        stdout = _dodari_cli_run_subprocess(cmd, stdin_payload, 'codex CLI', timeout, '-C', _dodari_codex_env())
-        if _dodari_codex_metadata_warning(stdout, model):
-            print(f'  [CLI Engine] WARNING: codex has no metadata for model {model} (not in its model list)', flush=True)
-        try:
-            return _dodari_cli_parse_codex(stdout, len(texts))
-        except DodariCliError as err:
-            err.raw_output = stdout
-            raise
+        for attempt in range(CODEX_TRANSIENT_RETRIES + 1):
+            stdout = ''
+            try:
+                stdout = _dodari_cli_run_subprocess(cmd, stdin_payload, 'codex CLI', timeout, '-C', _dodari_codex_env(),
+                                                    classify=_dodari_codex_failure_error)
+                if _dodari_codex_metadata_warning(stdout, model):
+                    print(f'  [CLI Engine] WARNING: codex has no metadata for model {model} (not in its model list)', flush=True)
+                return _dodari_cli_parse_codex(stdout, len(texts))
+            except DodariCliTransientError as err:
+                if attempt < CODEX_TRANSIENT_RETRIES:
+                    print(f'  [CLI Engine] codex temporary 429 (not a usage limit) — retry {attempt + 1}/{CODEX_TRANSIENT_RETRIES} '
+                          f'in {CODEX_TRANSIENT_WAIT_SEC}s | {err}', flush=True)
+                    _dodari_stop_wait(CODEX_TRANSIENT_WAIT_SEC)
+                    continue
+                raise DodariCliTemporaryLimitError(
+                    f'codex CLI: temporary 429 persisted after {attempt + 1} attempts (not a usage limit): {err}') from err
+            except (DodariCliRateLimitError, DodariCliAuthError, DodariCliStopped):
+                raise
+            except DodariCliError as err:
+                if stdout:
+                    err.raw_output = stdout
+                raise
     except DodariCliError:
         raise
     except Exception as err:
@@ -1057,7 +1363,8 @@ def _dodari_cli_ask(engine, prompt):
     if engine == ENGINE_CODEX_CLI:
         model, effort, timeout = _dodari_codex_defaults(model, effort)
         stdout = _dodari_cli_run_subprocess(_dodari_cli_codex_cmd(None, None, model, effort), prompt,
-                                            'codex CLI', timeout, '-C', _dodari_codex_env())
+                                            'codex CLI', timeout, '-C', _dodari_codex_env(),
+                                            classify=_dodari_codex_failure_error)
         return str(_dodari_cli_last_agent_message(stdout, check_failure=True)).strip()
 
     stdout = _dodari_cli_run_subprocess(_dodari_cli_claude_cmd(None, None, model, effort), prompt, 'claude CLI',
@@ -1258,6 +1565,12 @@ class DodariModelRejected(DodariCliError):
     pass
 
 class DodariCodexModelUnsupported(DodariModelRejected):
+    pass
+
+class DodariCliTransientError(DodariCliError):
+    pass
+
+class DodariCliAuthError(DodariCliError):
     pass
 
 def _dodari_codex_min_version(model):
@@ -1599,21 +1912,49 @@ def _dodari_append_translation_record(path, record):
         print(f'[Record] failed to write {path}: {err}', flush=True)
         return False
 
+_DODARI_STATS_LOCK = threading.Lock()
 
-_DODARI_STATS = threading.local()
+
+_DODARI_STATS = {}
+
+_DODARI_STATS_PARTIAL_KEYS = ('source_kept', 'format_dropped', 'chapters_skipped', 'toc_skipped')
+
+_DODARI_STATS_LOG_PREFIX = '[Dodari Stats] '
 
 def _dodari_stats_reset():
-    _DODARI_STATS.counts = {}
+    with _DODARI_STATS_LOCK:
+        _DODARI_STATS.clear()
 
 def _dodari_stats_add(key, n=1):
-    counts = getattr(_DODARI_STATS, 'counts', None)
-    if counts is None:
-        counts = {}
-        _DODARI_STATS.counts = counts
-    counts[key] = counts.get(key, 0) + n
+    with _DODARI_STATS_LOCK:
+        _DODARI_STATS[key] = _DODARI_STATS.get(key, 0) + n
 
 def _dodari_stats_snapshot():
-    return dict(getattr(_DODARI_STATS, 'counts', None) or {})
+    with _DODARI_STATS_LOCK:
+        return dict(_DODARI_STATS)
+
+def _dodari_stats_file_summary(counts):
+    counts = counts or {}
+    sentences = int(counts.get('sentences', 0))
+    summary = {
+        'translated': max(0, sentences - int(counts.get('source_kept', 0))),
+        'source_kept': int(counts.get('source_kept', 0)),
+        'format_dropped': int(counts.get('format_dropped', 0)),
+        'chapters_skipped': int(counts.get('chapters_skipped', 0)),
+        'toc_skipped': int(counts.get('toc_skipped', 0)),
+        'not_sent': int(counts.get('not_sent', 0)),
+        'local_failed': int(counts.get('local_failed', 0)),
+        'format_retried': int(counts.get('format_retried', 0)),
+    }
+    summary['partial'] = any(summary[k] for k in _DODARI_STATS_PARTIAL_KEYS)
+    return summary
+
+def _dodari_stats_broken_since(before):
+    now = _dodari_stats_snapshot()
+    return sum(max(0, now.get(k, 0) - (before or {}).get(k, 0)) for k in ('source_kept', 'format_dropped'))
+
+def _dodari_stats_log_line(filename, summary):
+    return _DODARI_STATS_LOG_PREFIX + json.dumps(dict({'file': str(filename)}, **summary), ensure_ascii=False)
 
 def _dodari_stats_is_schema_error(message):
     low = str(message).lower()
@@ -2161,6 +2502,11 @@ UI_TEXT = {
     'result_file_failed':"실패 ({t})",
     'result_total':"⏱ 총 소요 시간: <b>{t}</b>",
     'result_download':"📥 하단에서 성공한 결과물을 다운로드하세요.",
+    'result_partial_done_head':"⚠️ 부분 완료 — 일부 문장이 원문으로 남았습니다 &nbsp; (모델: <b>{model}</b>)",
+    'result_file_partial':"부분 완료 · <b>{t}</b> 소요",
+    'result_file_stats':"번역 {translated}문장 · 원문 유지 {kept}문장 · 건너뛴 장 {skipped}개 · 서식 포기 {dropped}문장",
+    'result_partial_retry':"↻ 같은 파일을 같은 설정으로 다시 번역하면 원문으로 남은 부분만 이어서 번역합니다.",
+    'result_partial_expire':"⏳ {days}일 동안 다시 번역하지 않으면 저장된 진행 기록이 자동으로 삭제됩니다.",
     'job_overall':"전체 {p}%",
     'job_overall_chapter':"전체 {p}% (챕터 {d}/{t})",
     'job_overall_section':"전체 {p}% (구간 {d}/{t})",
@@ -2261,6 +2607,11 @@ UI_TEXT = {
     'result_file_failed':"failed ({t})",
     'result_total':"⏱ Total time: <b>{t}</b>",
     'result_download':"📥 Download the successful results below.",
+    'result_partial_done_head':"⚠️ Partially complete — some sentences were left in the source language &nbsp; (model: <b>{model}</b>)",
+    'result_file_partial':"partially complete · <b>{t}</b>",
+    'result_file_stats':"{translated} sentences translated · {kept} kept in source · {skipped} chapters skipped · {dropped} with formatting dropped",
+    'result_partial_retry':"↻ Translate the same file again with the same settings to translate only the parts left in the source language.",
+    'result_partial_expire':"⏳ If you do not translate it again within {days} days, the saved progress is deleted automatically.",
     'job_overall':"Overall {p}%",
     'job_overall_chapter':"Overall {p}% (chapter {d}/{t})",
     'job_overall_section':"Overall {p}% (section {d}/{t})",
@@ -2361,6 +2712,11 @@ UI_TEXT = {
     'result_file_failed':"失敗 ({t})",
     'result_total':"⏱ 合計所要時間: <b>{t}</b>",
     'result_download':"📥 成功した結果を下でダウンロードしてください。",
+    'result_partial_done_head':"⚠️ 一部完了 — 一部の文が原文のまま残りました &nbsp; (モデル: <b>{model}</b>)",
+    'result_file_partial':"一部完了 · <b>{t}</b>",
+    'result_file_stats':"翻訳 {translated}文 · 原文のまま {kept}文 · スキップした章 {skipped} · 書式を省いた文 {dropped}",
+    'result_partial_retry':"↻ 同じファイルを同じ設定でもう一度翻訳すると、原文のまま残った部分だけを続けて翻訳します。",
+    'result_partial_expire':"⏳ {days}日以内にもう一度翻訳しないと、保存された進行状況は自動的に削除されます。",
     'job_overall':"全体 {p}%",
     'job_overall_chapter':"全体 {p}% (章 {d}/{t})",
     'job_overall_section':"全体 {p}% (区間 {d}/{t})",
@@ -2461,6 +2817,11 @@ UI_TEXT = {
     'result_file_failed':"失败 ({t})",
     'result_total':"⏱ 总耗时: <b>{t}</b>",
     'result_download':"📥 请在下方下载成功的结果。",
+    'result_partial_done_head':"⚠️ 部分完成 — 部分句子保留了原文 &nbsp; (模型: <b>{model}</b>)",
+    'result_file_partial':"部分完成 · <b>{t}</b>",
+    'result_file_stats':"已翻译 {translated} 句 · 保留原文 {kept} 句 · 跳过章节 {skipped} · 舍弃格式 {dropped} 句",
+    'result_partial_retry':"↻ 用相同设置再次翻译同一文件时，只会继续翻译保留原文的部分。",
+    'result_partial_expire':"⏳ 如果 {days} 天内没有再次翻译，已保存的进度将被自动删除。",
     'job_overall':"总体 {p}%",
     'job_overall_chapter':"总体 {p}% (章节 {d}/{t})",
     'job_overall_section':"总体 {p}% (区段 {d}/{t})",
@@ -2561,6 +2922,11 @@ UI_TEXT = {
     'result_file_failed':"échec ({t})",
     'result_total':"⏱ Durée totale : <b>{t}</b>",
     'result_download':"📥 Téléchargez les résultats réussis ci-dessous.",
+    'result_partial_done_head':"⚠️ Partiellement terminé — certaines phrases sont restées dans la langue source &nbsp; (modèle : <b>{model}</b>)",
+    'result_file_partial':"partiellement terminé · <b>{t}</b>",
+    'result_file_stats':"{translated} phrases traduites · {kept} laissées en langue source · {skipped} chapitres ignorés · {dropped} sans mise en forme",
+    'result_partial_retry':"↻ Relancez la traduction du même fichier avec les mêmes réglages pour traduire uniquement les parties restées en langue source.",
+    'result_partial_expire':"⏳ Si vous ne relancez pas la traduction dans les {days} jours, la progression enregistrée est supprimée automatiquement.",
     'job_overall':"Global : {p}%",
     'job_overall_chapter':"Global : {p}% (chapitre {d}/{t})",
     'job_overall_section':"Global : {p}% (section {d}/{t})",
@@ -2661,6 +3027,11 @@ UI_TEXT = {
     'result_file_failed':"non riuscito ({t})",
     'result_total':"⏱ Tempo totale: <b>{t}</b>",
     'result_download':"📥 Scarica qui sotto i risultati riusciti.",
+    'result_partial_done_head':"⚠️ Completato in parte — alcune frasi sono rimaste nella lingua originale &nbsp; (modello: <b>{model}</b>)",
+    'result_file_partial':"completato in parte · <b>{t}</b>",
+    'result_file_stats':"{translated} frasi tradotte · {kept} rimaste in originale · {skipped} capitoli saltati · {dropped} senza formattazione",
+    'result_partial_retry':"↻ Traduci di nuovo lo stesso file con le stesse impostazioni per tradurre solo le parti rimaste in originale.",
+    'result_partial_expire':"⏳ Se non traduci di nuovo entro {days} giorni, i progressi salvati vengono eliminati automaticamente.",
     'job_overall':"Totale: {p}%",
     'job_overall_chapter':"Totale: {p}% (capitolo {d}/{t})",
     'job_overall_section':"Totale: {p}% (sezione {d}/{t})",
@@ -2761,6 +3132,11 @@ UI_TEXT = {
     'result_file_failed':"mislukt ({t})",
     'result_total':"⏱ Totale tijd: <b>{t}</b>",
     'result_download':"📥 Download hieronder de geslaagde resultaten.",
+    'result_partial_done_head':"⚠️ Gedeeltelijk voltooid — sommige zinnen zijn in de brontaal gebleven &nbsp; (model: <b>{model}</b>)",
+    'result_file_partial':"gedeeltelijk voltooid · <b>{t}</b>",
+    'result_file_stats':"{translated} zinnen vertaald · {kept} in brontaal gebleven · {skipped} hoofdstukken overgeslagen · {dropped} zonder opmaak",
+    'result_partial_retry':"↻ Vertaal hetzelfde bestand opnieuw met dezelfde instellingen om alleen de delen in de brontaal te vertalen.",
+    'result_partial_expire':"⏳ Als u het bestand niet binnen {days} dagen opnieuw vertaalt, wordt de opgeslagen voortgang automatisch verwijderd.",
     'job_overall':"Totaal: {p}%",
     'job_overall_chapter':"Totaal: {p}% (hoofdstuk {d}/{t})",
     'job_overall_section':"Totaal: {p}% (sectie {d}/{t})",
@@ -2861,6 +3237,11 @@ UI_TEXT = {
     'result_file_failed':"mislykkedes ({t})",
     'result_total':"⏱ Samlet tid: <b>{t}</b>",
     'result_download':"📥 Download de vellykkede resultater nedenfor.",
+    'result_partial_done_head':"⚠️ Delvist fuldført — nogle sætninger blev stående på kildesproget &nbsp; (model: <b>{model}</b>)",
+    'result_file_partial':"delvist fuldført · <b>{t}</b>",
+    'result_file_stats':"{translated} sætninger oversat · {kept} på kildesproget · {skipped} kapitler sprunget over · {dropped} uden formatering",
+    'result_partial_retry':"↻ Oversæt den samme fil igen med de samme indstillinger for kun at oversætte de dele, der stod tilbage på kildesproget.",
+    'result_partial_expire':"⏳ Hvis du ikke oversætter filen igen inden for {days} dage, slettes den gemte fremdrift automatisk.",
     'job_overall':"Samlet: {p}%",
     'job_overall_chapter':"Samlet: {p}% (kapitel {d}/{t})",
     'job_overall_section':"Samlet: {p}% (afsnit {d}/{t})",
@@ -2961,6 +3342,11 @@ UI_TEXT = {
     'result_file_failed':"misslyckades ({t})",
     'result_total':"⏱ Total tid: <b>{t}</b>",
     'result_download':"📥 Ladda ned de lyckade resultaten nedan.",
+    'result_partial_done_head':"⚠️ Delvis klar — vissa meningar blev kvar på källspråket &nbsp; (modell: <b>{model}</b>)",
+    'result_file_partial':"delvis klar · <b>{t}</b>",
+    'result_file_stats':"{translated} meningar översatta · {kept} kvar på källspråket · {skipped} kapitel överhoppade · {dropped} utan formatering",
+    'result_partial_retry':"↻ Översätt samma fil igen med samma inställningar för att bara översätta de delar som blev kvar på källspråket.",
+    'result_partial_expire':"⏳ Om du inte översätter filen igen inom {days} dagar raderas de sparade framstegen automatiskt.",
     'job_overall':"Totalt: {p}%",
     'job_overall_chapter':"Totalt: {p}% (kapitel {d}/{t})",
     'job_overall_section':"Totalt: {p}% (avsnitt {d}/{t})",
@@ -3061,6 +3447,11 @@ UI_TEXT = {
     'result_file_failed':"mislyktes ({t})",
     'result_total':"⏱ Total tid: <b>{t}</b>",
     'result_download':"📥 Last ned de vellykkede resultatene nedenfor.",
+    'result_partial_done_head':"⚠️ Delvis fullført — noen setninger ble stående på kildespråket &nbsp; (modell: <b>{model}</b>)",
+    'result_file_partial':"delvis fullført · <b>{t}</b>",
+    'result_file_stats':"{translated} setninger oversatt · {kept} på kildespråket · {skipped} kapitler hoppet over · {dropped} uten formatering",
+    'result_partial_retry':"↻ Oversett den samme filen på nytt med de samme innstillingene for å oversette bare delene som ble stående på kildespråket.",
+    'result_partial_expire':"⏳ Hvis du ikke oversetter filen på nytt innen {days} dager, slettes den lagrede fremdriften automatisk.",
     'job_overall':"Totalt: {p}%",
     'job_overall_chapter':"Totalt: {p}% (kapittel {d}/{t})",
     'job_overall_section':"Totalt: {p}% (seksjon {d}/{t})",
@@ -3161,6 +3552,11 @@ UI_TEXT = {
     'result_file_failed':"فشل ({t})",
     'result_total':"⏱ إجمالي الوقت: <b>{t}</b>",
     'result_download':"📥 قم بتنزيل النتائج الناجحة أدناه.",
+    'result_partial_done_head':"⚠️ اكتملت جزئيًا — بقيت بعض الجمل بلغة المصدر &nbsp; (النموذج: <b>{model}</b>)",
+    'result_file_partial':"اكتملت جزئيًا · <b>{t}</b>",
+    'result_file_stats':"تُرجمت {translated} جملة · بقيت {kept} بلغة المصدر · تخطي {skipped} فصل · {dropped} دون تنسيق",
+    'result_partial_retry':"↻ أعد ترجمة الملف نفسه بالإعدادات نفسها لترجمة الأجزاء التي بقيت بلغة المصدر فقط.",
+    'result_partial_expire':"⏳ إذا لم تُعد الترجمة خلال {days} يومًا، فسيُحذف التقدّم المحفوظ تلقائيًا.",
     'job_overall':"الإجمالي: {p}%",
     'job_overall_chapter':"الإجمالي: {p}% (الفصل {d}/{t})",
     'job_overall_section':"الإجمالي: {p}% (القسم {d}/{t})",
@@ -3261,6 +3657,11 @@ UI_TEXT = {
     'result_file_failed':"ناموفق ({t})",
     'result_total':"⏱ کل زمان: <b>{t}</b>",
     'result_download':"📥 نتایج موفق را در زیر دانلود کنید.",
+    'result_partial_done_head':"⚠️ تا حدی کامل شد — برخی جمله‌ها به زبان مبدا ماندند &nbsp; (مدل: <b>{model}</b>)",
+    'result_file_partial':"تا حدی کامل شد · <b>{t}</b>",
+    'result_file_stats':"{translated} جمله ترجمه شد · {kept} به زبان مبدا ماند · {skipped} فصل رد شد · {dropped} بدون قالب‌بندی",
+    'result_partial_retry':"↻ همان فایل را با همان تنظیمات دوباره ترجمه کنید تا فقط بخش‌هایی که به زبان مبدا ماندند ترجمه شوند.",
+    'result_partial_expire':"⏳ اگر ظرف {days} روز دوباره ترجمه نکنید، پیشرفت ذخیره\u200cشده به\u200cطور خودکار حذف می\u200cشود.",
     'job_overall':"کل: {p}%",
     'job_overall_chapter':"کل: {p}% (فصل {d}/{t})",
     'job_overall_section':"کل: {p}% (بخش {d}/{t})",
@@ -3503,6 +3904,99 @@ def _dodari_token_fix(translation, source):
         return translation
     return (translation or '').rstrip() + ' ' + ' '.join(dict.fromkeys(missing))
 
+def _dodari_token_mismatch(source, translation):
+    out_tokens = list(EPUB_TOKEN_RE.finditer(translation or ''))
+    if sorted(m.group(0) for m in out_tokens) != sorted(m.group(0) for m in EPUB_TOKEN_RE.finditer(source or '')):
+        return True
+    stack = []
+    for m in out_tokens:
+        if m.group(2) != 'F':
+            continue
+        n = int(m.group(3))
+        if not m.group(1):
+            stack.append(n)
+        elif not stack or stack.pop() != n:
+            return True
+    return bool(stack)
+
+GLOSSARY_LATIN_STOPWORDS = {
+    'The', 'A', 'An', 'In', 'On', 'At', 'Of', 'And', 'Or', 'But',
+    'Is', 'Was', 'Are', 'Were', 'He', 'She', 'It', 'They', 'We',
+    'I', 'You', 'His', 'Her', 'This', 'That', 'With', 'For', 'To',
+    'From', 'By', 'As', 'Be', 'Have', 'Has', 'Had', 'Not', 'Do',
+}
+
+GLOSSARY_KO_PARTICLES = ('에게서', '으로서', '으로써', '에서는', '에게는', '께서', '에게', '한테', '에서', '으로', '부터', '까지',
+                         '처럼', '보다', '은', '는', '이', '가', '을', '를', '의', '에', '와', '과', '도', '로', '만', '야')
+
+def _dodari_glossary_latin_source(lang, text):
+    code = str(lang or '').split('-')[0].lower()
+    if code:
+        return code not in ('ko', 'ja', 'zh', 'ar', 'fa')
+    letters = [ch for ch in (text or '')[:20000] if ch.isalpha()]
+    return not letters or sum(1 for ch in letters if ch.isascii()) * 2 >= len(letters)
+
+def _dodari_glossary_candidates(text, lang=None, limit=40):
+    from collections import Counter
+    text = (text or '')[:300000]
+    code = str(lang or '').split('-')[0].lower()
+    if _dodari_glossary_latin_source(code, text):
+        words = re.findall(r"\b([A-Z][a-zA-Z']{1,})\b", text)
+        freq = Counter(w for w in words if w not in GLOSSARY_LATIN_STOPWORDS)
+        return [w for w, _ in freq.most_common(limit)]
+    freq = Counter()
+    if code in ('zh', 'ja'):
+        for run in re.findall(r'[\u30a0-\u30ff\u31f0-\u31ffー]{2,}', text):
+            freq[run] += 1
+        for run in re.findall(r'[\u4e00-\u9fff]{2,}', text):
+            for size in (2, 3, 4):
+                for i in range(len(run) - size + 1):
+                    freq[run[i:i + size]] += 1
+        frequent = {w: n for w, n in freq.items() if n >= 2}
+        freq = Counter({w: n for w, n in frequent.items()
+                        if not any(len(o) > len(w) and w in o and frequent[o] == n for o in frequent)})
+    else:
+        for word in re.findall(r'\w{2,}', text):
+            if word.isdigit():
+                continue
+            if code == 'ko':
+                for particle in GLOSSARY_KO_PARTICLES:
+                    if word.endswith(particle) and len(word) - len(particle) >= 2:
+                        word = word[:-len(particle)]
+                        break
+            freq[word] += 1
+    return [w for w, n in freq.most_common(limit * 3) if n >= 2][:limit]
+
+def _dodari_text_sentences(text, lang=None):
+    code = str(lang or '').split('-')[0].lower()
+    if code in ('zh', 'ja'):
+        parts = re.findall(r'.+?(?:[。！？!?]+(?:[」』”’"\')）\]】〕》〉]|⟦/F\d+⟧)*|$)', text or '', flags=re.S)
+        out = []
+        for part in (p.strip() for p in parts):
+            if not part:
+                continue
+            if code == 'ja' and out and part.startswith(('と', 'って')):
+                out[-1] += part
+            else:
+                out.append(part)
+        return out
+    if code in ('ar', 'fa'):
+        return [p.strip() for p in re.split(r'(?<=[.!?؟۔])\s+', text or '') if p.strip()]
+    return nltk.sent_tokenize(text)
+
+def _dodari_text_join_lines(particles):
+    lines = []
+    current = []
+    for item in particles:
+        if item == '\n':
+            lines.append(' '.join(current))
+            current = []
+        else:
+            current.append(str(item))
+    if current:
+        lines.append(' '.join(current))
+    return '\n'.join(lines)
+
 
 def _dodari_text_detokenize(text, atoms):
     def repl(m):
@@ -3702,7 +4196,7 @@ def _dodari_epub_make_unit(run, ctx, depth, tokenize, nested):
         walk(node)
     raw = ''.join(parts)
     text = re.sub(r'\s+', ' ', raw).strip()
-    if not text or not re.search(r'[a-zA-Z]', EPUB_TOKEN_RE.sub('', text)):
+    if not text or not _dodari_epub_translatable(text):
         return None
     sentences = _dodari_epub_balance_sentences(tokenize(text))
     records = [{'src': s, 'translate': _dodari_epub_translatable(s)} for s in sentences]
@@ -3720,9 +4214,10 @@ def _dodari_epub_make_unit(run, ctx, depth, tokenize, nested):
     }
 
 
-def _dodari_epub_collect_units(soup, tokenize=None, code_classes=()):
+def _dodari_epub_collect_units(soup, tokenize=None, code_classes=(), lang=None):
     if tokenize is None:
-        tokenize = nltk.sent_tokenize
+        def tokenize(text):
+            return _dodari_text_sentences(text, lang)
     body = soup.find('body') or soup
     inline_css = ' '.join(style.get_text() for style in soup.find_all('style'))
     ctx = {
@@ -4013,7 +4508,7 @@ def _dodari_epub_text_weight(html_text):
 def _dodari_epub_chapter_weights(epub_path, folder, html_files):
     return [_dodari_epub_text_weight(text) for text in _dodari_epub_original_texts(epub_path, folder, html_files)]
 
-def _dodari_epub_book_plan(epub_path, folder, html_files, code_classes, chunk_size, batch_size):
+def _dodari_epub_book_plan(epub_path, folder, html_files, code_classes, chunk_size, batch_size, lang=None):
     plan = []
     for text in _dodari_epub_original_texts(epub_path, folder, html_files):
         try:
@@ -4022,13 +4517,27 @@ def _dodari_epub_book_plan(epub_path, folder, html_files, code_classes, chunk_si
             if body and EPUB_SKIP_EPUB_TYPES.intersection((body.get('epub:type') or '').split()):
                 plan.append((0, 0))
                 continue
-            units = _dodari_epub_collect_units(soup, code_classes=code_classes)
+            units = _dodari_epub_collect_units(soup, code_classes=code_classes, lang=lang)
             n = sum(1 for unit in units for record in unit['sentences'] if record['translate'])
         except Exception:
             n = 0
         batches = sum(-(-min(chunk_size, n - start) // batch_size) for start in range(0, n, chunk_size))
         plan.append((n, batches))
     return plan
+
+def _dodari_epub_restore_original(epub_path, folder, path, targets):
+    import zipfile as _zipfile
+    rel = os.path.relpath(str(path), str(folder)).replace(os.sep, '/')
+    try:
+        with _zipfile.ZipFile(epub_path, 'r') as archive:
+            data = archive.read(rel)
+        for target in targets:
+            with open(target, 'wb') as fp:
+                fp.write(data)
+        return True
+    except Exception as err:
+        print(f'[Resume] Could not restore original {rel} from the source EPUB: {err}')
+        return False
 
 def _dodari_epub_original_texts(epub_path, folder, html_files):
     import zipfile as _zipfile
@@ -4387,6 +4896,7 @@ class Dodari:
         self.model_loading = False
         self.genre_inference_failed = False
         self.llm_proc = None
+        self._job_cfg = None
         _engine = load_engine_config()
         if _dodari_cli_is_engine(_engine):
             self.gemma_model = _engine
@@ -4663,8 +5173,6 @@ class Dodari:
 
                             yield '🔍 Scanning file for proper noun candidates...', ''
 
-                            from collections import Counter
-                            import re as _re
                             raw_texts = []
                             for file in self.selected_files[:3]:
                                 try:
@@ -4692,15 +5200,8 @@ class Dodari:
                                 yield '⚠️ Could not read text from file.', ''
                                 return
 
-                            stopwords = {
-                                'The', 'A', 'An', 'In', 'On', 'At', 'Of', 'And', 'Or', 'But',
-                                'Is', 'Was', 'Are', 'Were', 'He', 'She', 'It', 'They', 'We',
-                                'I', 'You', 'His', 'Her', 'This', 'That', 'With', 'For', 'To',
-                                'From', 'By', 'As', 'Be', 'Have', 'Has', 'Had', 'Not', 'Do',
-                            }
-                            candidates_raw = _re.findall(r'\b([A-Z][a-zA-Z\']{1,})\b', full_text)
-                            freq = Counter(c for c in candidates_raw if c not in stopwords)
-                            top_candidates = [word for word, _ in freq.most_common(40)]
+                            source_lang = self.origin_lang
+                            top_candidates = _dodari_glossary_candidates(full_text, source_lang, limit=40)
 
                             if not top_candidates:
                                 yield '⚠️ No proper noun candidates found.', ''
@@ -4709,13 +5210,17 @@ class Dodari:
                             yield f'✨ Found {len(top_candidates)} candidates. AI is refining...', ''
 
                             candidate_list_str = ', '.join(top_candidates)
+                            excerpt = ''
+                            if not _dodari_glossary_latin_source(source_lang, full_text):
+                                excerpt = f'\n\nDocument excerpt:\n{full_text[:1500]}'
                             extraction_prompt = (
                                 f'The following words were frequently found in a document to be translated into {self.target_lang_prompt}. '
                                 f'From this list, identify the most important proper nouns (character names, place names, '
                                 f'organization names, technical terms) that should be consistently translated. '
-                                f'For each selected term, provide the recommended {self.target_lang_prompt} translation. '
+                                f'Write each selected term exactly as it appears in the document (without attached particles or endings), '
+                                f'and provide the recommended {self.target_lang_prompt} translation. '
                                 f'Return ONLY a list in this exact format, one per line: "OriginalWord: Translation". '
-                                f'Select at most 25 terms. Ignore common English words.\n\nWord list: {candidate_list_str}'
+                                f'Select at most 25 terms. Ignore common words.\n\nWord list: {candidate_list_str}{excerpt}'
                             )
                             try:
                                 ai_result = self._ask_llm(extraction_prompt, max_tokens=512)
@@ -4884,7 +5389,7 @@ class Dodari:
             share=False,
             inbrowser=True,
             favicon_path='imgs/dodari.png',
-            allowed_paths=['.', './outputs']
+            allowed_paths=['./outputs']
         )
 
     def _cli_engine_setup(self, engine):
@@ -5015,7 +5520,7 @@ class Dodari:
         self.model_loading = True
         yield _dodari_model_switch_message(self._T, 'stopping', model_short)
 
-        cleanup_llm_server()
+        cleanup_llm_server(_dodari_url_port(self.gemma_api_url, LLM_SERVER_PORT))
 
         if current_platform == 'Darwin':
             server_env, cached = _dodari_llm_server_env(new_model)
@@ -5023,8 +5528,8 @@ class Dodari:
             cmd = _dodari_mlx_server_cmd(mlx_python, new_model, self.kv_bits)
             print(f"[Model Switch] Mac(MLX) params: batch={self.translate_batch_size}, workers={self.translate_workers}, kv-bits={self.kv_bits}")
             print(f"[Model Switch] HF cache: {'complete snapshot found → offline, no download' if cached else 'not cached → will download from HuggingFace'}")
-            self.llm_proc = subprocess.Popen(cmd, shell=True, env=server_env)
-            _dodari_mark_llm_started()
+            self.llm_proc = subprocess.Popen(cmd, shell=True, env=server_env, start_new_session=True)
+            _dodari_mark_llm_started(self.llm_proc)
         else:
             vllm_model = os.environ.get('VLLM_MODEL', 'cyankiwi/gemma-4-31B-it-AWQ-4bit')
             vllm_python = os.environ.get('VLLM_PYTHON', sys.executable)
@@ -5039,8 +5544,8 @@ class Dodari:
             )
             cmd += f" --served-model-name {self.gemma_model} --enforce-eager"
             print(f"[Model Switch] Linux(vLLM) model: {vllm_model} (served as {self.gemma_model}, gpu-mem {_gpu_mem_util}, max-len {_max_model_len})")
-            self.llm_proc = subprocess.Popen(cmd, shell=True)
-            _dodari_mark_llm_started()
+            self.llm_proc = subprocess.Popen(cmd, shell=True, start_new_session=True)
+            _dodari_mark_llm_started(self.llm_proc)
             cached = True
 
         _base_url = self.gemma_api_url.rsplit('/v1/', 1)[0]
@@ -5161,9 +5666,11 @@ class Dodari:
                 _dodari_job_error(_msg)
                 return None, _msg
 
+        self._job_cfg = None
+        job_files = list(self.selected_files)
         self.start = time.time()
         self.is_translating = True
-        _dodari_job_start([f['orig_name'] for f in self.selected_files])
+        _dodari_job_start([f['orig_name'] for f in job_files])
         print("Start! now.." + str(self.start))
         progress(0, desc=self._T('progress_init'))
         _dodari_job_progress(self._T('progress_init'))
@@ -5209,8 +5716,8 @@ class Dodari:
                 _guide = self._T(_guide_key)
                 return self._abort_pipeline(f"<p style='color:red;'>{self._T('err_server').format(url=_base_url, guide=_guide)}</p>")
             print('Gemma API ready for translation')
-            if self.genre_inference_failed and genre_val == GENRE_CHOICES_KO[-1] and self.selected_files:
-                _first_name = os.path.splitext(self.selected_files[0]['orig_name'])[0]
+            if self.genre_inference_failed and genre_val == GENRE_CHOICES_KO[-1] and job_files:
+                _first_name = os.path.splitext(job_files[0]['orig_name'])[0]
                 _regenre = self.auto_detect_genre(_first_name)
                 if not self.genre_inference_failed and _regenre != genre_val:
                     print(f'[Genre] Re-detected at translation start: {_regenre}')
@@ -5231,29 +5738,39 @@ class Dodari:
 
         origin_abb = self.origin_lang
         target_abb = target_iso
-        _engine_display = _dodari_engine_display(self.gemma_model, *self._cli_selection(self.gemma_model))
+        self._job_cfg = self._snapshot_job_cfg()
+        job_engine = self._job_value('gemma_model')
+        job_selection = self._job_cli_selection(job_engine)
+        job_glossary_hash = _dodari_resume_glossary_hash(self._job_value('user_glossary'))
+        _engine_display = _dodari_engine_display(job_engine, *job_selection)
         print(f'[Pipeline] Engine: {_engine_display} | {origin_abb} → {target_abb} | genre: {genre_val} | tone: {tone_val}', flush=True)
         all_file_path = []
         file_times = []
         pipeline_failures = []
+        file_summaries = {}
 
-        for file in progress.tqdm(self.selected_files, desc=self._T('progress_files')):
+        for file in progress.tqdm(job_files, desc=self._T('progress_files')):
             print(f'file: {file}')
             _dodari_job_progress(
                 self._T('job_processing').format(name=file['orig_name']),
-                current=len(file_times), total=len(self.selected_files)
+                current=len(file_times), total=len(job_files)
             )
             _dodari_job_units([], '')
             name, ext = os.path.splitext(file['orig_name'])
             ext = ext.lower()
             file_start_time = time.time()
+            _dodari_stats_reset()
 
             resume_settings = {
-                'model': _dodari_engine_signature(self.gemma_model, *self._cli_selection(self.gemma_model)),
+                'model': _dodari_engine_signature(job_engine, *job_selection),
                 'target_lang': target_abb,
                 'genre': genre_val,
                 'tone': tone_val,
                 'bilingual_order': bilingual_order_val,
+                'source_lang': origin_abb,
+                'source_hash': _dodari_resume_file_hash(file['path']),
+                'glossary_hash': job_glossary_hash,
+                'pipeline': RESUME_PIPELINE_VERSION,
             }
             if 'epub' in ext:
                 resume_settings['model'] = f"{resume_settings['model']}|{EPUB_UNIT_FORMAT}"
@@ -5328,7 +5845,8 @@ class Dodari:
                 )
                 _book_plan = _dodari_epub_book_plan(
                     file['path'], self.temp_folder_1, file_path, epub_code_classes,
-                    max(1, self.translate_batch_size * self.translate_workers), max(1, self.translate_batch_size),
+                    max(1, self._job_value('translate_batch_size') * self._job_value('translate_workers')),
+                    max(1, self._job_value('translate_batch_size')), lang=origin_abb,
                 )
                 _dodari_job_book_plan(
                     sum(n for n, _b in _book_plan), sum(b for _n, b in _book_plan),
@@ -5345,13 +5863,15 @@ class Dodari:
                     unit_key = _dodari_resume_unit_key(self.temp_folder_1, html_file)
                     if _dodari_resume_is_done(resume_done, unit_key):
                         print(f'[Resume] Skipping already translated chapter: {unit_key}')
+                        _dodari_stats_add('sentences', _book_plan[chapter_idx][0] if chapter_idx < len(_book_plan) else 0)
                         _dodari_job_unit_done(chapter_idx)
                         continue
                     input_file_1 = None
                     input_file_2 = None
+                    html_file_2 = html_file.replace(self.temp_folder_1, self.temp_folder_2)
+                    if resume_mode:
+                        _dodari_epub_restore_original(file['path'], self.temp_folder_1, html_file, (html_file, html_file_2))
                     try:
-                        html_file_2 = html_file.replace(self.temp_folder_1, self.temp_folder_2)
-
                         input_file_1 = open(html_file, 'r', encoding='utf-8')
                         input_file_2 = open(html_file_2, 'r', encoding='utf-8')
 
@@ -5368,24 +5888,32 @@ class Dodari:
                             _dodari_job_unit_done(chapter_idx)
                             continue
 
-                        units_1 = _dodari_epub_collect_units(soup_1, code_classes=epub_code_classes)
-                        units_2 = _dodari_epub_collect_units(soup_2, code_classes=epub_code_classes)
+                        units_1 = _dodari_epub_collect_units(soup_1, code_classes=epub_code_classes, lang=origin_abb)
+                        units_2 = _dodari_epub_collect_units(soup_2, code_classes=epub_code_classes, lang=origin_abb)
                         if len(units_1) != len(units_2):
                             raise ValueError(f'EPUB unit count mismatch ({len(units_1)} != {len(units_2)})')
 
                         only_texts = []
                         whole_particle = []
+                        not_sent = 0
                         for unit in units_1:
                             particle = [r['src'] for r in unit['sentences'] if r['translate']]
+                            not_sent += sum(1 for r in unit['sentences'] if not r['translate'])
                             only_texts.extend(particle)
                             whole_particle.extend(particle)
                             whole_particle.append(0)
+                        _dodari_stats_add('not_sent', not_sent)
 
                     except Exception as err:
+                        for _fp in (input_file_1, input_file_2):
+                            if _fp is not None:
+                                _fp.close()
                         print(err)
                         print('HTML parsing error, skipping chapter')
+                        _dodari_stats_add('chapters_skipped')
                         continue
 
+                    chapter_stats = _dodari_stats_snapshot()
                     try:
                         parti_1, parti_2 = self.resumable_translate(
                             only_texts, whole_particle, 'epub', genre_val, tone_val, bilingual_order_val,
@@ -5425,8 +5953,18 @@ class Dodari:
                         output_file_1.close()
                         output_file_2.close()
                     except Exception as err:
+                        for _fp in (input_file_1, input_file_2):
+                            if _fp is not None and not _fp.closed:
+                                _fp.close()
+                        _dodari_epub_restore_original(file['path'], self.temp_folder_1, html_file, (html_file, html_file_2))
                         print(err)
                         print('HTML reassembly error, skipping chapter')
+                        _dodari_stats_add('chapters_skipped')
+                        continue
+
+                    if _dodari_stats_broken_since(chapter_stats):
+                        print(f'[Resume] Chapter {unit_key} has sentences kept as source or with formatting dropped — not marked done')
+                        _dodari_job_unit_done(chapter_idx)
                         continue
 
                     _dodari_resume_mark_done(self.temp_folder_1, file['orig_name'], resume_settings, resume_done, unit_key)
@@ -5457,13 +5995,16 @@ class Dodari:
                 shutil.move(f'{self.temp_folder_1}.epub', done_path_1)
                 shutil.move(f'{self.temp_folder_2}.epub', done_path_2)
 
-                _dodari_resume_cleanup(self.temp_folder_1)
-                _dodari_resume_cleanup(self.temp_folder_2)
+                if self._finish_file_stats(file_summaries, f'{name}{ext}'):
+                    print(f'[Resume] Partial result — keeping resume folders for a rerun: {self.temp_folder_1}, {self.temp_folder_2}')
+                else:
+                    _dodari_resume_cleanup(self.temp_folder_1)
+                    _dodari_resume_cleanup(self.temp_folder_2)
                 self._record_file_time(file_times, f'{name}{ext}', file_start_time, True)
 
             elif '.pdf' in ext:
                 print(f'[PDF] Starting: {name}{ext}')
-                print(f'[PDF] Language: {origin_abb} → {target_abb} | Model: {self.gemma_model}')
+                print(f'[PDF] Language: {origin_abb} → {target_abb} | Model: {job_engine}')
 
                 if not DOCLING_AVAILABLE:
                     print('[PDF] Error: docling not installed. Run: pip install docling')
@@ -5477,7 +6018,8 @@ class Dodari:
                     if _dodari_resume_should_resume(self.temp_folder_1, resume_settings):
                         resume_done = _dodari_resume_load_snapshot(self.temp_folder_1, resume_settings)['done']
                         print(f'[Resume] Existing progress found for "{file["orig_name"]}"')
-                        print(f'[Resume] {len(resume_done)} translation chunk(s) already done, PDF structure will be rebuilt')
+                        print(f'[Resume] {len(resume_done)} translation chunk(s) already done; cached PDF structure is reused per section, '
+                              f'missing sections are rebuilt with Docling')
                     else:
                         self.remove_folder(self.temp_folder_1)
                         resume_done = []
@@ -5490,11 +6032,13 @@ class Dodari:
                     _pdf_cover_bytes = None
                     _pdf_cover_ext   = 'jpeg'
                     _pdf_text_layer = False
+                    _pdf_scan_pages = None
                     if FITZ_AVAILABLE:
                         with fitz.open(file['path']) as _meta_doc:
                             total_pages = len(_meta_doc)
                             _pdf_meta   = _meta_doc.metadata or {}
                             _pdf_text_layer = _dodari_pdf_has_text_layer(_meta_doc)
+                            _pdf_scan_pages = _dodari_pdf_scan_pages(_meta_doc)
                             try:
                                 _p0_imgs = _meta_doc[0].get_images(full=True)
                                 if _p0_imgs:
@@ -5505,7 +6049,8 @@ class Dodari:
                             except Exception as _ce:
                                 print(f'[PDF] Cover image extraction failed: {_ce}')
                     print(f'[PDF] Total pages: {total_pages}')
-                    print(f'[PDF] Text layer: {"yes — OCR disabled" if _pdf_text_layer else "no — OCR enabled"}')
+                    _scan_note = f', scan-like pages: {len(_pdf_scan_pages)}' if _pdf_scan_pages else ''
+                    print(f'[PDF] Text layer: {"yes" if _pdf_text_layer else "no"}{_scan_note} — OCR is decided per 50-page section')
                     print(f'[PDF] Meta — title: {_pdf_meta.get("title","")}, author: {_pdf_meta.get("author","")}')
 
                     CHUNK_SIZE = 50
@@ -5548,7 +6093,7 @@ class Dodari:
                         pipeline_options = PdfPipelineOptions()
                         pipeline_options.generate_picture_images = True
                         pipeline_options.images_scale = 2.0
-                        pipeline_options.do_ocr = not _pdf_text_layer
+                        pipeline_options.do_ocr = True
                         if sys.platform == 'darwin':
                             pipeline_options.accelerator_options = AcceleratorOptions(
                                 num_threads=8,
@@ -5601,6 +6146,8 @@ class Dodari:
                                 else:
                                     conv_path = file['path']
 
+                                pipeline_options.do_ocr = _dodari_pdf_section_needs_ocr(_pdf_scan_pages, start_pg, end_pg)
+                                print(f'[PDF chunk] {chunk_label} OCR {"on" if pipeline_options.do_ocr else "off"}')
                                 converter = DocumentConverter(
                                     format_options={'pdf': PdfFormatOption(pipeline_options=pipeline_options)}
                                 )
@@ -5861,8 +6408,9 @@ class Dodari:
                                 if re.search(r'\.{3,}\s*\d+\s*$', text):
                                     continue
                                 if len(text) > 1 and any(c.isalpha() for c in text):
-                                    block_unit = _dodari_pdf_block_units(text)
+                                    block_unit = _dodari_pdf_block_units(text, origin_abb)
                                     sentences = [r['src'] for r in block_unit['sentences'] if r['translate']]
+                                    _dodari_stats_add('not_sent', sum(1 for r in block_unit['sentences'] if not r['translate']))
                                     if not sentences:
                                         continue
                                     only_texts.extend(sentences)
@@ -5965,7 +6513,10 @@ class Dodari:
 
                     all_file_path.extend([done_path_1, done_path_2])
                     print(f'[PDF] Success! EPUB created: {done_path_1}, {done_path_2}')
-                    _dodari_resume_cleanup(self.temp_folder_1)
+                    if self._finish_file_stats(file_summaries, f'{name}{ext}'):
+                        print(f'[Resume] Partial result — keeping resume folder for a rerun: {self.temp_folder_1}')
+                    else:
+                        _dodari_resume_cleanup(self.temp_folder_1)
                     self._record_file_time(file_times, f'{name}{ext}', file_start_time, True)
 
                 except Exception as err:
@@ -5986,7 +6537,7 @@ class Dodari:
                 only_texts = []
                 whole_particle = []
                 for sen in progress.tqdm(sentences, desc='Paragraph'):
-                    particle = nltk.sent_tokenize(sen)
+                    particle = _dodari_text_sentences(sen, origin_abb)
                     particle = self.clean_text_spacing(particle)
 
                     only_texts.extend(particle)
@@ -6019,13 +6570,16 @@ class Dodari:
                     continue
 
                 _dodari_job_unit_done(0)
-                translated_particle_1 = ' '.join(particle_list_1)
-                translated_particle_2 = ' '.join(particle_list_2)
+                translated_particle_1 = _dodari_text_join_lines(particle_list_1)
+                translated_particle_2 = _dodari_text_join_lines(particle_list_2)
                 output_file_1.write(translated_particle_1)
                 output_file_2.write(translated_particle_2)
                 all_file_path.extend([output_file_1.name, output_file_2.name])
                 self.finalize_file_streams(book, output_file_1, output_file_2)
-                _dodari_resume_cleanup(self.temp_folder_1)
+                if self._finish_file_stats(file_summaries, f'{name}{ext}'):
+                    print(f'[Resume] Partial result — keeping resume folder for a rerun: {self.temp_folder_1}')
+                else:
+                    _dodari_resume_cleanup(self.temp_folder_1)
                 self._record_file_time(file_times, f'{name}{ext}', file_start_time, True)
 
         sec = self.reset_session_and_gc()
@@ -6034,15 +6588,16 @@ class Dodari:
         print(f'[Pipeline] Finished: {success_count} succeeded, {len(pipeline_failures)} failed | Engine: {_engine_display}')
         _dodari_append_translation_record(os.path.join(self.output_folder, TRANSLATION_RECORD_NAME), {
             'finished_at': time.strftime('%Y-%m-%d %H:%M:%S'),
-            'engine': self.gemma_model,
-            'engine_signature': _dodari_engine_signature(self.gemma_model, *self._cli_selection(self.gemma_model)),
+            'engine': job_engine,
+            'engine_signature': _dodari_engine_signature(job_engine, *job_selection),
             'engine_display': _engine_display,
             'source_lang': origin_abb,
             'target_lang': target_abb,
             'genre': genre_val,
             'tone': tone_val,
-            'files': [{'name': _f, 'elapsed': _e, 'ok': _ok} for _f, _e, _ok in file_times],
+            'files': [{'name': _f, 'elapsed': _e, 'ok': _ok, 'stats': file_summaries.get(_f)} for _f, _e, _ok in file_times],
             'failures': len(pipeline_failures),
+            'partial_files': sorted(_f for _f, _s in file_summaries.items() if _s.get('partial')),
             'outputs': list(all_file_path),
         })
 
@@ -6054,17 +6609,23 @@ class Dodari:
             _dodari_job_error(failure_msg)
             return all_file_path, failure_msg
 
-        model_short = _dodari_engine_display(self.gemma_model, *self._cli_selection(self.gemma_model)).split('/')[-1]
-        rows = ''.join(
-            f"{'📄' if ok else '❌'} [{fname}] &nbsp; "
-            f"{self._T('result_file_ok').format(t=elapsed) if ok else self._T('result_file_failed').format(t=elapsed)}<br>"
-            for fname, elapsed, ok in file_times
-        )
-        headline = self._T('result_partial_head' if pipeline_failures else 'result_ok_head').format(model=model_short)
+        model_short = _engine_display.split('/')[-1]
+        rows = ''.join(self._result_file_row(fname, elapsed, ok, file_summaries.get(fname)) for fname, elapsed, ok in file_times)
+        any_partial = any(_s.get('partial') for _s in file_summaries.values())
+        if pipeline_failures:
+            head_key = 'result_partial_head'
+        elif any_partial:
+            head_key = 'result_partial_done_head'
+        else:
+            head_key = 'result_ok_head'
+        headline = self._T(head_key).format(model=model_short)
+        retry_note = (f"{self._T('result_partial_retry')}<br>"
+                      f"{self._T('result_partial_expire').format(days=RESUME_FOLDER_RETENTION_DAYS)}<br>") if any_partial else ''
         result_msg = (
             f"<p style='line-height:2;'>"
             f"{headline}<br>"
             f"{rows}"
+            f"{retry_note}"
             f"{'─' * 28}<br>"
             f"{self._T('result_total').format(t=sec)}<br>"
             f"{self._T('result_download')}"
@@ -6091,7 +6652,7 @@ class Dodari:
 
     def get_tone_prompt_extension(self, tone_val: str) -> str:
         is_formal = "경어체" in tone_val
-        lang = self.target_lang
+        lang = self._job_value('target_lang')
 
         if lang == 'ko':
             if is_formal:
@@ -6215,11 +6776,11 @@ class Dodari:
                 )
 
     def request_gemma_api_single(self, text: str, genre_val: str, tone_val: str = "서술체 (~다)") -> str:
-        if _dodari_cli_is_engine(self.gemma_model):
+        if _dodari_cli_is_engine(self._job_value('gemma_model')):
             try:
                 out = self.request_cli_batch([text], genre_val, tone_val)
                 return (out[0] or text) if out else text
-            except DodariCliRateLimitError:
+            except (DodariCliRateLimitError, DodariCliAuthError, DodariCliStopped):
                 raise
             except DodariCliError as err:
                 print(f'Single CLI call failed: {err}')
@@ -6230,7 +6791,7 @@ class Dodari:
         tone_instruction = self.get_tone_prompt_extension(tone_val)
         token_instruction = EPUB_TOKEN_INSTRUCTION if '⟦' in text else ''
         prompt = (
-            f"Translate the following text into {self.target_lang_prompt}. "
+            f"Translate the following text into {self._job_value('target_lang_prompt')}. "
             f"{genre_instruction}"
             f"{tone_instruction}"
             f"{token_instruction}"
@@ -6240,7 +6801,7 @@ class Dodari:
             f"add parenthetical notes of your own.\n\n{text}"
         )
         payload = {
-            "model": self.gemma_model,
+            "model": self._job_value('gemma_model'),
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": self.max_len,
             "temperature": self.temperature,
@@ -6260,6 +6821,7 @@ class Dodari:
         except Exception as err:
             print(f'Single API call failed: {err}')
             _dodari_stats_add('source_kept')
+            _dodari_stats_add('local_failed')
             return text
 
     def _parse_llm_response(self, raw: str, expected_count: int) -> list:
@@ -6292,9 +6854,10 @@ class Dodari:
         return self._parse_llm_response(raw, expected_count)
 
     def _glossary_instruction(self) -> str:
-        if not self.user_glossary:
+        glossary = self._job_value('user_glossary')
+        if not glossary:
             return ''
-        terms = ', '.join(f'"{src}" → "{tgt}"' for src, tgt in self.user_glossary.items())
+        terms = ', '.join(f'"{src}" → "{tgt}"' for src, tgt in glossary.items())
         return f'TERMINOLOGY (Strictly enforce — no exceptions): {terms}. '
 
     def build_cli_system_prompt(self, genre_val: str, tone_val: str = "서술체 (~다)") -> str:
@@ -6305,7 +6868,7 @@ class Dodari:
 
         return (
             f"You are a professional translator. "
-            f"Translate each numbered sentence given by the user into {self.target_lang_prompt}. "
+            f"Translate each numbered sentence given by the user into {self._job_value('target_lang_prompt')}. "
             f"{glossary_instruction}"
             f"{genre_instruction}"
             f"{tone_instruction}"
@@ -6399,6 +6962,28 @@ class Dodari:
             return self.claude_model, self.claude_effort
         return None, None
 
+    JOB_CFG_KEYS = ('gemma_model', 'target_lang', 'target_lang_name', 'target_lang_prompt', 'origin_lang',
+                    'user_glossary', 'translate_batch_size', 'translate_workers',
+                    'codex_model', 'codex_effort', 'claude_model', 'claude_effort')
+
+    def _snapshot_job_cfg(self):
+        cfg = {k: getattr(self, k, None) for k in self.JOB_CFG_KEYS}
+        cfg['user_glossary'] = dict(cfg['user_glossary'] or {})
+        return cfg
+
+    def _job_value(self, name):
+        cfg = self.__dict__.get('_job_cfg')
+        if cfg is not None and self.__dict__.get('is_translating') and name in cfg:
+            return cfg[name]
+        return getattr(self, name)
+
+    def _job_cli_selection(self, engine):
+        if engine == ENGINE_CODEX_CLI:
+            return self._job_value('codex_model'), self._job_value('codex_effort')
+        if engine == ENGINE_CLAUDE_CLI:
+            return self._job_value('claude_model'), self._job_value('claude_effort')
+        return None, None
+
     def _set_cli_selection(self, engine, model, effort, save=True):
         model, effort = (model or None), (effort or None)
         if engine == ENGINE_CODEX_CLI:
@@ -6416,9 +7001,11 @@ class Dodari:
             _write_ui_config({'cli_models': _dodari_engine_selection_update(_read_ui_config(), engine, model, effort)['cli_models']})
 
     def _run_cli_engine(self, texts, system_prompt):
-        if self.gemma_model == ENGINE_CODEX_CLI:
-            return _dodari_cli_run_codex(texts, system_prompt, self.codex_model, self.codex_effort)
-        return _dodari_cli_run_claude(texts, system_prompt, self.claude_model, self.claude_effort)
+        engine = self._job_value('gemma_model')
+        model, effort = self._job_cli_selection(engine)
+        if engine == ENGINE_CODEX_CLI:
+            return _dodari_cli_run_codex(texts, system_prompt, model, effort)
+        return _dodari_cli_run_claude(texts, system_prompt, model, effort)
 
     def _refresh_cli_models(self, engine, err=None):
         self.__dict__.setdefault('_cli_choices_cache', {}).pop(engine, None)
@@ -6430,7 +7017,7 @@ class Dodari:
         return list(DODARI_CONFIG[section]['models']) if section else []
 
     def _handle_model_rejection(self, engine, err, retried):
-        model = self._cli_selection(engine)[0]
+        model = self._job_cli_selection(engine)[0]
         exc = DodariCodexModelUnsupported if engine == ENGINE_CODEX_CLI else DodariModelRejected
         _dodari_stats_add('model_unsupported')
         if engine == ENGINE_CODEX_CLI and _dodari_codex_is_model_unsupported(err):
@@ -6461,36 +7048,53 @@ class Dodari:
         retried = False
         while True:
             try:
+                _dodari_stop_check()
                 result = self._run_cli_engine(texts, system_prompt)
                 break
+            except DodariCliTemporaryLimitError as err:
+                print(f'  [CLI Engine] TEMPORARY 429 (not a usage limit): {err}', flush=True)
+                print('  [CLI Engine] Stopping now. Progress is kept — rerun after a short wait.', flush=True)
+                raise
             except DodariCliRateLimitError as err:
                 print(f'  [CLI Engine] SUBSCRIPTION LIMIT REACHED: {err}', flush=True)
                 print('  [CLI Engine] Stopping now. Progress is kept — rerun after the limit resets.', flush=True)
                 raise
+            except DodariCliAuthError as err:
+                print(f'  [CLI Engine] LOGIN/AUTH FAILURE: {err}', flush=True)
+                print('  [CLI Engine] Stopping now. Progress is kept — log in again, then rerun.', flush=True)
+                raise
+            except DodariCliStopped as err:
+                print(f'  [CLI Engine] {err}', flush=True)
+                raise
             except DodariModelRejected:
                 raise
             except DodariCliError as err:
+                if _DODARI_STOP_EVENT.is_set():
+                    print('  [CLI Engine] STOP REQUESTED — CLI call ended by the stop signal, no retry', flush=True)
+                    raise DodariCliStopped(f'STOP REQUESTED — CLI call ended by the stop signal: {err}') from err
                 print(f'  [CLI Engine] failed: {err}', flush=True)
                 if _dodari_model_rejected(err):
-                    self._handle_model_rejection(self.gemma_model, err, retried)
+                    self._handle_model_rejection(self._job_value('gemma_model'), err, retried)
                     retried = True
                     continue
                 _dodari_stats_add('schema_violation' if _dodari_stats_is_schema_error(err) else 'cli_error')
                 raise
-        print(f'  [CLI Engine] {_dodari_engine_display(self.gemma_model, *self._cli_selection(self.gemma_model))} batch of {len(texts)} done in {time.time() - t0:.1f}s', flush=True)
+        engine = self._job_value('gemma_model')
+        print(f'  [CLI Engine] {_dodari_engine_display(engine, *self._job_cli_selection(engine))} batch of {len(texts)} done in {time.time() - t0:.1f}s', flush=True)
         return [_dodari_strip_translator_notes(r) for r in result]
 
     def _record_cli_failure(self, texts, err):
         raw = getattr(err, 'raw_output', '') or ''
-        if raw and self.gemma_model == ENGINE_CODEX_CLI:
+        engine = self._job_value('gemma_model')
+        if raw and engine == ENGINE_CODEX_CLI:
             try:
                 raw = str(_dodari_cli_last_agent_message(raw))
             except Exception:
                 pass
-        model, effort = self._cli_selection(self.gemma_model)
+        model, effort = self._job_cli_selection(engine)
         _dodari_record_cli_failure(os.path.join(self.output_folder, CLI_FAILURE_RECORD_NAME), {
             'ts': time.strftime('%Y-%m-%d %H:%M:%S'),
-            'engine': self.gemma_model,
+            'engine': engine,
             'model': model,
             'effort': effort,
             'n_in': len(texts),
@@ -6507,7 +7111,7 @@ class Dodari:
             try:
                 out = self._cli_call_once(texts, system_prompt)
                 break
-            except (DodariCliRateLimitError, DodariModelRejected):
+            except (DodariCliRateLimitError, DodariModelRejected, DodariCliAuthError, DodariCliStopped):
                 raise
             except DodariCliError as err:
                 self._record_cli_failure(texts, err)
@@ -6554,7 +7158,7 @@ class Dodari:
         if not texts:
             return []
 
-        if _dodari_cli_is_engine(self.gemma_model):
+        if _dodari_cli_is_engine(self._job_value('gemma_model')):
             return self.request_cli_batch(texts, genre_val, tone_val)
 
         genre_instruction = self.get_genre_prompt_extension(genre_val)
@@ -6563,12 +7167,12 @@ class Dodari:
         glossary_instruction = self._glossary_instruction()
         token_instruction = EPUB_TOKEN_INSTRUCTION if any('⟦' in t for t in texts) else ''
 
-        use_schema = _dodari_supports_structured_output(self.gemma_api_url, self.gemma_model)
+        use_schema = _dodari_supports_structured_output(self.gemma_api_url, self._job_value('gemma_model'))
 
         numbered_input = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
         if use_schema:
             prompt = (
-                f"Translate each numbered sentence below into {self.target_lang_prompt}. "
+                f"Translate each numbered sentence below into {self._job_value('target_lang_prompt')}. "
                 f"{glossary_instruction}"
                 f"{genre_instruction}"
                 f"{tone_instruction}"
@@ -6585,7 +7189,7 @@ class Dodari:
             )
         else:
             prompt = (
-                f"Translate each numbered sentence below into {self.target_lang_prompt}. "
+                f"Translate each numbered sentence below into {self._job_value('target_lang_prompt')}. "
                 f"{glossary_instruction}"
                 f"{genre_instruction}"
                 f"{tone_instruction}"
@@ -6598,12 +7202,16 @@ class Dodari:
                 f"never refer to other sentence numbers, never merge or skip items, "
                 f"and never add parenthetical notes of your own.\n\n{numbered_input}"
             )
-        batch_max_tokens = min(self.max_len * len(texts), 1024)
+        try:
+            context_limit = int(_dodari_vllm_settings()['max_model_len']) if platform.system() == 'Linux' else None
+        except Exception:
+            context_limit = None
+        batch_max_tokens = _dodari_local_batch_max_tokens(texts, prompt, context_limit)
         
         batch_timeout = max(300, 120 * len(texts))
         
         payload = {
-            "model": self.gemma_model,
+            "model": self._job_value('gemma_model'),
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": batch_max_tokens,
             "temperature": self.temperature,
@@ -6643,7 +7251,7 @@ class Dodari:
                     print(f'  [Error] Batch API failed ({attempt + 1}/{max_retries}): {err}. Retrying in {wait_time}s...')
                     time.sleep(wait_time)
                 else:
-                    print(f'  [Fatal] Batch API failed 3 times. Falling back to individual calls.')
+                    print('  [Fatal] Batch API failed 3 times. Falling back to individual calls.')
                     return [self.request_gemma_api_single(t, genre_val, tone_val) for t in texts]
 
         return [self.request_gemma_api_single(t, genre_val, tone_val) for t in texts]
@@ -6668,14 +7276,16 @@ class Dodari:
 
         from concurrent.futures import ThreadPoolExecutor
 
+        batch_size = max(1, self._job_value('translate_batch_size'))
+        workers = max(1, self._job_value('translate_workers'))
         total = len(processed_texts)
         chunks = [
-            processed_texts[i: i + self.translate_batch_size]
-            for i in range(0, total, self.translate_batch_size)
+            processed_texts[i: i + batch_size]
+            for i in range(0, total, batch_size)
         ]
 
         total_chunks = len(chunks)
-        print(f'▶ Translation start: {total} sentences → {total_chunks} batches × {self.translate_workers} workers')
+        print(f'▶ Translation start: {total} sentences → {total_chunks} batches × {workers} workers')
         self._batch_lock = threading.Lock()
         self._batch_done = getattr(self, '_batch_base', 0) or 0
         self._batch_report_total = getattr(self, '_batch_span', 0) or total_chunks
@@ -6683,8 +7293,8 @@ class Dodari:
         t_start = time.time()
 
         chunk_results = []
-        for _g_start in range(0, total_chunks, self.translate_workers):
-            _group = chunks[_g_start: _g_start + self.translate_workers]
+        for _g_start in range(0, total_chunks, workers):
+            _group = chunks[_g_start: _g_start + workers]
             _args = [(_g_start + i, total_chunks, c, genre_val, tone_val) for i, c in enumerate(_group)]
             with ThreadPoolExecutor(max_workers=len(_group)) as executor:
                 _group_results = list(executor.map(self._process_translation_batch, _args))
@@ -6737,13 +7347,44 @@ class Dodari:
 
         return particle_list_1, particle_list_2
 
+    def _retry_token_mismatches(self, sources, translations, genre_val, tone_val):
+        bad = [i for i, (src, out) in enumerate(zip(sources, translations))
+               if '⟦' in str(src) and out and out != src and _dodari_token_mismatch(src, out)]
+        if not bad:
+            return translations
+        _dodari_stats_add('format_retried', len(bad))
+        print(f'  [Tokens] {len(bad)} sentence(s) with broken format/code tokens — retranslating them once', flush=True)
+        kept_before = _dodari_stats_snapshot().get('source_kept', 0)
+        try:
+            retried = self.request_gemma_api_batch([sources[i] for i in bad], genre_val, tone_val)
+        except (DodariCliRateLimitError, DodariCliAuthError, DodariCliStopped, DodariModelRejected):
+            raise
+        except Exception as err:
+            print(f'  [Tokens] retranslation failed: {err}', flush=True)
+            retried = []
+        extra_kept = _dodari_stats_snapshot().get('source_kept', 0) - kept_before
+        if extra_kept > 0:
+            _dodari_stats_add('source_kept', -extra_kept)
+        out = list(translations)
+        dropped = 0
+        for j, i in enumerate(bad):
+            new = retried[j] if j < len(retried) else None
+            if new and new != sources[i] and not _dodari_token_mismatch(sources[i], new):
+                out[i] = new
+            else:
+                dropped += 1
+                print(f'  [Tokens] item {i + 1} formatting dropped — tokens still broken after one retry', flush=True)
+        if dropped:
+            _dodari_stats_add('format_dropped', dropped)
+        return out
+
     def resumable_translate(self, only_texts, whole_particle, what, genre_val, tone_val, bilingual_order,
                             resume_folder, source_name, resume_settings, resume_done, progress=None, key_prefix=''):
-        chunk_size = max(1, self.translate_batch_size * self.translate_workers)
+        chunk_size = max(1, self._job_value('translate_batch_size') * self._job_value('translate_workers'))
         text_chunks = _dodari_resume_split_chunks(only_texts, chunk_size)
         total_chunks = len(text_chunks)
         translated_all = []
-        batch_size = max(1, self.translate_batch_size)
+        batch_size = max(1, self._job_value('translate_batch_size'))
         chunk_batches = [-(-len(chunk) // batch_size) for chunk in text_chunks]
         self._batch_span = sum(chunk_batches)
         self._batch_base = 0
@@ -6757,6 +7398,7 @@ class Dodari:
                     cached = _dodari_resume_load_chunk(resume_folder, chunk_id)
                 if cached is not None and len(cached) == len(chunk):
                     print(f'[Resume] Chunk {c_idx + 1}/{total_chunks} loaded from cache')
+                    _dodari_stats_add('sentences', len(chunk))
                     translated_all.extend(cached)
                     self._batch_base += chunk_batches[c_idx]
                     _dodari_job_book_add(len(cached), chunk_batches[c_idx])
@@ -6767,13 +7409,23 @@ class Dodari:
                     _el = int(time.time() - self.start) if self.start else 0
                     progress(0.7, desc=f'[Chunk] {c_idx + 1}/{total_chunks} translating... (elapsed: {format_korean_time(_el)})')
 
+                stats_before = _dodari_stats_snapshot()
                 chunk_translated = self.translate_sentence_block(chunk, genre_val, tone_val)
                 if len(chunk_translated) != len(chunk):
                     print(f'[Warning] Chunk {c_idx + 1} returned {len(chunk_translated)} of {len(chunk)} sentences, padding with source text')
+                    if len(chunk_translated) < len(chunk):
+                        _dodari_stats_add('source_kept', len(chunk) - len(chunk_translated))
                     chunk_translated = (list(chunk_translated) + list(chunk))[:len(chunk)]
+                chunk_translated = self._retry_token_mismatches(chunk, chunk_translated, genre_val, tone_val)
+                _dodari_stats_add('sentences', len(chunk))
 
-                _dodari_resume_save_chunk(resume_folder, chunk_id, chunk_translated)
-                _dodari_resume_mark_done(resume_folder, source_name, resume_settings, resume_done, chunk_key)
+                broken = _dodari_stats_broken_since(stats_before)
+                if broken:
+                    print(f'[Resume] Chunk {c_idx + 1}/{total_chunks}: {broken} sentence(s) kept as source or with formatting dropped '
+                          f'— not cached, a rerun retranslates this chunk')
+                else:
+                    _dodari_resume_save_chunk(resume_folder, chunk_id, chunk_translated)
+                    _dodari_resume_mark_done(resume_folder, source_name, resume_settings, resume_done, chunk_key)
                 translated_all.extend(chunk_translated)
                 self._batch_base += chunk_batches[c_idx]
         finally:
@@ -7035,6 +7687,7 @@ class Dodari:
                     return opf_path
 
     def _translate_epub_ncx(self, file, genre_val, tone_val, bilingual_order_val, resume_settings, resume_done, pipeline_failures):
+        origin = self._job_value('origin_lang')
         for ncx_1 in _dodari_epub_ncx_files(self.temp_folder_1):
             rel = _dodari_resume_unit_key(self.temp_folder_1, ncx_1)
             done_key = _dodari_resume_chunk_key(EPUB_NCX_RESUME_PREFIX + rel)
@@ -7042,6 +7695,7 @@ class Dodari:
                 print(f'[Resume] Skipping already translated NCX: {rel}')
                 continue
             ncx_2 = os.path.join(self.temp_folder_2, rel)
+            _dodari_epub_restore_original(file['path'], self.temp_folder_1, ncx_1, (ncx_1, ncx_2))
             try:
                 with open(ncx_1, 'r', encoding='utf-8') as fp:
                     xml_1 = fp.read()
@@ -7053,13 +7707,14 @@ class Dodari:
                     raise ValueError('NCX labels differ between the two copies')
                 soup_1 = _dodari_epub_ncx_soup([t for _span, t in labels_1])
                 soup_2 = _dodari_epub_ncx_soup([t for _span, t in labels_2])
-                units_1 = _dodari_epub_collect_units(soup_1)
-                units_2 = _dodari_epub_collect_units(soup_2)
+                units_1 = _dodari_epub_collect_units(soup_1, lang=origin)
+                units_2 = _dodari_epub_collect_units(soup_2, lang=origin)
                 if len(units_1) != len(units_2):
                     raise ValueError(f'NCX unit count mismatch ({len(units_1)} != {len(units_2)})')
             except Exception as err:
                 print(err)
                 print(f'[EPUB] NCX parsing error, keeping source table of contents: {rel}')
+                _dodari_stats_add('toc_skipped')
                 continue
             print(f'[EPUB] NCX table of contents: {rel} ({len(labels_1)} labels, {len(units_1)} to translate)')
             if units_1:
@@ -7070,6 +7725,7 @@ class Dodari:
                     only_texts.extend(particle)
                     whole_particle.extend(particle)
                     whole_particle.append(0)
+                ncx_stats = _dodari_stats_snapshot()
                 try:
                     _parti_1, parti_2 = self.resumable_translate(
                         only_texts, whole_particle, 'epub', genre_val, tone_val, bilingual_order_val,
@@ -7096,8 +7752,13 @@ class Dodari:
                             fp.flush()
                             os.fsync(fp.fileno())
                 except Exception as err:
+                    _dodari_epub_restore_original(file['path'], self.temp_folder_1, ncx_1, (ncx_1, ncx_2))
                     print(err)
                     print(f'[EPUB] NCX reassembly error, keeping source table of contents: {rel}')
+                    _dodari_stats_add('toc_skipped')
+                    continue
+                if _dodari_stats_broken_since(ncx_stats):
+                    print(f'[Resume] NCX {rel} has labels kept as source — not marked done')
                     continue
             _dodari_resume_mark_done(self.temp_folder_1, file['orig_name'], resume_settings, resume_done, done_key)
             _dodari_resume_save_snapshot(self.temp_folder_2, file['orig_name'], resume_settings, resume_done)
@@ -7108,6 +7769,25 @@ class Dodari:
         during = end - start_time
         sec = str(timedelta(seconds=during)).split('.')[0]
         return sec if what == 1 else during
+
+    def _result_file_row(self, fname, elapsed, ok, summary):
+        if not ok:
+            return f"❌ [{fname}] &nbsp; {self._T('result_file_failed').format(t=elapsed)}<br>"
+        if not summary:
+            return f"📄 [{fname}] &nbsp; {self._T('result_file_ok').format(t=elapsed)}<br>"
+        icon, key = ('⚠️', 'result_file_partial') if summary.get('partial') else ('📄', 'result_file_ok')
+        stats = self._T('result_file_stats').format(
+            translated=summary.get('translated', 0), kept=summary.get('source_kept', 0),
+            skipped=summary.get('chapters_skipped', 0) + summary.get('toc_skipped', 0),
+            dropped=summary.get('format_dropped', 0),
+        )
+        return f"{icon} [{fname}] &nbsp; {self._T(key).format(t=elapsed)}<br>&nbsp;&nbsp;&nbsp;{stats}<br>"
+
+    def _finish_file_stats(self, file_summaries, label):
+        summary = _dodari_stats_file_summary(_dodari_stats_snapshot())
+        file_summaries[label] = summary
+        print(_dodari_stats_log_line(label, summary), flush=True)
+        return summary['partial']
 
     def _record_file_time(self, file_times, label, file_start_time, ok):
         file_times.append((label, self.calculate_elapsed_time(file_start_time, 1), ok))
@@ -7120,11 +7800,12 @@ class Dodari:
         return sec
 
     def _ask_llm(self, prompt: str, max_tokens: int = 400) -> str:
-        if _dodari_cli_is_engine(self.gemma_model):
-            return _dodari_cli_ask(self.gemma_model, prompt)
+        engine = self._job_value('gemma_model')
+        if _dodari_cli_is_engine(engine):
+            return _dodari_cli_ask(engine, prompt)
 
         payload = {
-            'model': self.gemma_model,
+            'model': engine,
             'messages': [{'role': 'user', 'content': prompt}],
             'max_tokens': max_tokens,
             'temperature': 0.3,
@@ -7341,14 +8022,11 @@ class Dodari:
                 new_particle.append(s)
         return new_particle
 
-    def contains_no_alphabets(self, text):
-        pattern = r'^[^a-zA-Z]*$'
-        return bool(re.match(pattern, text))
-
 if __name__ == "__main__":
     dodari = Dodari()
     print('Multi-file enabled: ', dodari.is_multi)
     print('Text file size check: ', dodari.is_check_size)
     print()
 
+    _dodari_resume_prune_expired('.')
     dodari.launch_interface()
